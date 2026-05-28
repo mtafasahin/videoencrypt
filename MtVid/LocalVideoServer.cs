@@ -995,21 +995,107 @@ internal sealed class LocalVideoServer : IDisposable
 
         .play-layout {
             display: grid;
-            grid-template-columns: minmax(240px, 300px) 1fr;
+            grid-template-columns: minmax(280px, 340px) minmax(0, 1fr) minmax(260px, 320px);
             gap: 14px;
             align-items: start;
+        }
+
+        .play-main {
+            display: grid;
+            gap: 14px;
+        }
+
+        .player-surface {
+            border-radius: 16px;
+            overflow: hidden;
+            background: #000;
+        }
+
+        .player-surface video {
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            height: auto;
+            max-height: none;
+            border-radius: 0;
+            outline: none;
+            box-shadow: none;
+        }
+
+        .video-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .video-title {
+            font-size: clamp(16px, 2.2vw, 22px);
+            font-weight: 700;
+            letter-spacing: .2px;
         }
 
         .playlist-panel {
             position: sticky;
             top: 12px;
+            align-self: start;
         }
 
         .playlist-items {
             margin: 0;
-            padding-left: 20px;
+            padding-left: 0;
             max-height: 58vh;
             overflow: auto;
+            list-style: none;
+        }
+
+        .playlist-items li {
+            margin-bottom: 8px;
+        }
+
+        .playlist-btn {
+            width: 100%;
+            text-align: left;
+            border-radius: 10px;
+            padding: 10px;
+            border: 1px solid #2a323d;
+            background: linear-gradient(180deg, #1a2430, #121a23);
+            color: #dfe8f3;
+            font-size: 13px;
+            letter-spacing: .2px;
+            display: grid;
+            grid-template-columns: 36px 1fr;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .playlist-idx {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            display: grid;
+            place-items: center;
+            background: #223041;
+            color: #9fb3c8;
+            font-weight: 700;
+            font-size: 12px;
+        }
+
+        .playlist-name {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .playlist-btn.current {
+            border-color: #57c2ad;
+            box-shadow: 0 0 0 2px #57c2ad33;
+            color: #fff;
+        }
+
+        .playlist-btn.current .playlist-idx {
+            background: linear-gradient(135deg, #49b9a3, #78e0c8);
+            color: #032019;
         }
 
         .check-row {
@@ -1018,6 +1104,28 @@ internal sealed class LocalVideoServer : IDisposable
             align-items: center;
             color: var(--muted);
             font-size: 13px;
+        }
+
+        .now-playing {
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        .now-playing-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #f3f7ff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .now-playing-meta {
+            font-size: 12px;
+            color: #9eb0c2;
         }
 
         video {
@@ -1039,6 +1147,97 @@ internal sealed class LocalVideoServer : IDisposable
             color: var(--accent-2);
         }
 
+        body.mode-play {
+            background:
+                radial-gradient(1200px 600px at 80% -10%, #2a385655 0%, transparent 64%),
+                radial-gradient(1200px 600px at -10% 110%, #1f5b5755 0%, transparent 66%),
+                linear-gradient(140deg, #0a0f16, #101722 40%, #0f1722 100%);
+            color: #e8eef8;
+        }
+
+        body.mode-play .top {
+            position: sticky;
+            top: 0;
+            z-index: 8;
+            background: linear-gradient(90deg, #131b27f0, #151f2df0);
+            border-bottom: 1px solid #273246;
+            backdrop-filter: blur(10px);
+            padding: 14px 22px;
+        }
+
+        body.mode-play .brand {
+            font-family: "Avenir Next Condensed", "Avenir Next", "Segoe UI", sans-serif;
+            font-size: clamp(22px, 2.5vw, 30px);
+            color: #f3f8ff;
+            letter-spacing: .5px;
+        }
+
+        body.mode-play .meta {
+            color: #9caec2;
+        }
+
+        body.mode-play .meta a {
+            color: #7fe2cb;
+            text-decoration: none;
+            margin-left: 6px;
+        }
+
+        body.mode-play .panel {
+            background: linear-gradient(180deg, #121a24ef, #0e151eef);
+            border: 1px solid #253245;
+            color: #d6dfeb;
+            box-shadow: 0 18px 32px rgba(0, 0, 0, .24);
+            border-radius: 14px;
+        }
+
+        body.mode-play .label,
+        body.mode-play .status,
+        body.mode-play .hint {
+            color: #9fb0c4;
+        }
+
+        body.mode-play input[type="text"],
+        body.mode-play input[type="password"] {
+            border: 1px solid #32445d;
+            background: #0f1621;
+            color: #edf3ff;
+        }
+
+        body.mode-play .progress-wrap {
+            background: #253243;
+        }
+
+        body.mode-play .progress-bar {
+            background: linear-gradient(90deg, #4dbca5, #7be0cc);
+        }
+
+        body.mode-play .play-layout {
+            grid-template-columns: minmax(300px, 360px) minmax(0, 1fr) minmax(280px, 340px);
+            gap: 20px;
+        }
+
+        body.mode-play .player-surface {
+            border: 1px solid #2d3d54;
+            box-shadow: 0 30px 60px rgba(0, 0, 0, .38);
+            border-radius: 16px;
+        }
+
+        body.mode-play .video-title {
+            color: #f3f8ff;
+        }
+
+        body.mode-play button {
+            background: linear-gradient(135deg, #1f8f7d, #36b59e);
+            color: #f7fffd;
+            border: 1px solid #2db59f55;
+        }
+
+        body.mode-play button.alt {
+            background: linear-gradient(135deg, #36455c, #2a3444);
+            border-color: #4f637f55;
+            color: #dfe8f5;
+        }
+
         @keyframes rise {
             to {
                 transform: translateY(0);
@@ -1056,6 +1255,7 @@ internal sealed class LocalVideoServer : IDisposable
             .playlist-panel { position: static; }
             .playlist-items { max-height: 28vh; }
             body.page-app .body { padding: 12px; }
+            .video-meta { align-items: flex-start; }
         }
     </style>
 </head>
@@ -1114,16 +1314,6 @@ internal sealed class LocalVideoServer : IDisposable
 
             <div id="playSection">
                 <div class="play-layout">
-                    <div class="panel playlist-panel">
-                        <div class="label">Playlist</div>
-                        <ol id="playlistList" class="playlist-items"></ol>
-                        <div class="row-grid" style="margin-top:8px;">
-                            <button id="prevBtn" type="button">Onceki</button>
-                            <button id="nextBtn" type="button">Sonraki</button>
-                        </div>
-                        <button id="clearPlaylistBtn" type="button" style="margin-top:8px;">Listeyi Temizle</button>
-                    </div>
-
                     <div>
                         <div class="panel">
                             <div class="row">
@@ -1150,12 +1340,34 @@ internal sealed class LocalVideoServer : IDisposable
                             <div class="progress-wrap"><div id="openProgressBar" class="progress-bar"></div></div>
                             <div id="status" class="status"></div>
                         </div>
+                    </div>
 
-                        <video controls preload="metadata" src="/stream"></video>
-                        <p class="hint">
-                            Bu ekran sadece calisan MtVid uygulamasi ile erisilebilir.
-                            Stream kaynagi <strong>/stream</strong> uzerinden anlik cozulur.
-                        </p>
+                    <div>
+                        <div class="play-main">
+                            <div class="player-surface">
+                                <video controls preload="metadata" src="/stream"></video>
+                            </div>
+
+                            <div class="panel video-meta">
+                                <div id="nowPlayingTitle" class="video-title">Secili parca yok</div>
+                                <div id="nowPlayingMeta" class="now-playing-meta">0 parca</div>
+                            </div>
+
+                            <p class="hint">
+                                Bu ekran sadece calisan MtVid uygulamasi ile erisilebilir.
+                                Stream kaynagi <strong>/stream</strong> uzerinden anlik cozulur.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="panel playlist-panel">
+                        <div class="label">Playlist</div>
+                        <ol id="playlistList" class="playlist-items"></ol>
+                        <div class="row-grid" style="margin-top:8px;">
+                            <button id="prevBtn" type="button">Onceki</button>
+                            <button id="nextBtn" type="button">Sonraki</button>
+                        </div>
+                        <button id="clearPlaylistBtn" type="button" style="margin-top:8px;">Listeyi Temizle</button>
                     </div>
                 </div>
             </div>
@@ -1193,6 +1405,8 @@ internal sealed class LocalVideoServer : IDisposable
         const playlistList = document.getElementById('playlistList');
         const openProgressBar = document.getElementById('openProgressBar');
         const status = document.getElementById('status');
+        const nowPlayingTitle = document.getElementById('nowPlayingTitle');
+        const nowPlayingMeta = document.getElementById('nowPlayingMeta');
 
         const LARGE_OPEN_THRESHOLD_BYTES = 512 * 1024 * 1024;
 
@@ -1206,6 +1420,22 @@ internal sealed class LocalVideoServer : IDisposable
         } else if (pageMode === 'play') {
             if (encryptSection) encryptSection.style.display = 'none';
         }
+        document.body.classList.add(`mode-${pageMode}`);
+
+        function updateNowPlaying() {
+            if (!nowPlayingTitle || !nowPlayingMeta) {
+                return;
+            }
+
+            if (currentPlaylistIndex < 0 || currentPlaylistIndex >= playlist.length) {
+                nowPlayingTitle.textContent = 'Secili parca yok';
+                nowPlayingMeta.textContent = `${playlist.length} parca`;
+                return;
+            }
+
+            nowPlayingTitle.textContent = playlist[currentPlaylistIndex].name;
+            nowPlayingMeta.textContent = `${currentPlaylistIndex + 1}/${playlist.length}`;
+        }
 
         function renderPlaylist() {
             if (!playlistList) {
@@ -1218,8 +1448,18 @@ internal sealed class LocalVideoServer : IDisposable
                 const li = document.createElement('li');
                 const btn = document.createElement('button');
                 btn.type = 'button';
-                btn.textContent = (i === currentPlaylistIndex ? '▶ ' : '') + item.name;
-                btn.style.marginBottom = '6px';
+                btn.className = 'playlist-btn' + (i === currentPlaylistIndex ? ' current' : '');
+
+                const idx = document.createElement('span');
+                idx.className = 'playlist-idx';
+                idx.textContent = i === currentPlaylistIndex ? '▶' : String(i + 1);
+
+                const name = document.createElement('span');
+                name.className = 'playlist-name';
+                name.textContent = item.name;
+
+                btn.appendChild(idx);
+                btn.appendChild(name);
                 btn.onclick = async () => {
                     try {
                         await playPlaylistIndex(i);
@@ -1230,6 +1470,8 @@ internal sealed class LocalVideoServer : IDisposable
                 li.appendChild(btn);
                 playlistList.appendChild(li);
             }
+
+            updateNowPlaying();
         }
 
         async function playPlaylistIndex(index) {
@@ -1532,6 +1774,7 @@ internal sealed class LocalVideoServer : IDisposable
             currentPlaylistIndex = -1;
             renderPlaylist();
             status.textContent = 'Playlist temizlendi.';
+            updateNowPlaying();
         });
 
         prevBtn.addEventListener('click', async () => {
