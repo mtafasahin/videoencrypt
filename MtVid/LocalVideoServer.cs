@@ -1337,6 +1337,96 @@ internal sealed class LocalVideoServer : IDisposable
             background: linear-gradient(135deg, var(--accent-2), #49a592);
         }
 
+        .top-controls {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: nowrap;
+            white-space: nowrap;
+        }
+
+        .top-password-input {
+            border: 1px solid #cfc5b3;
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 13px;
+            background: #fff;
+            color: var(--ink);
+            width: 160px;
+            min-width: 140px;
+            flex-shrink: 0;
+        }
+
+        .top-open-btn {
+            padding: 8px 12px;
+            font-size: 13px;
+            border-radius: 8px;
+            border: 0;
+            background: #2f7f72;
+            color: #fff;
+            cursor: pointer;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .top-open-btn:hover {
+            background: #409886;
+        }
+
+        body.mode-play .top-password-input {
+            background: #1a1a1a;
+            color: #f1f1f1;
+            border-color: #3f3f3f;
+        }
+
+        body.mode-play .top-open-btn {
+            background: #1f1f1f;
+            border: 1px solid #4a4a4a;
+            color: #e6e6e6;
+        }
+
+        body.mode-play .top-open-btn:hover {
+            background: #2a2a2a;
+        }
+
+        .advanced-section {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 300ms ease;
+        }
+
+        .advanced-section.open {
+            max-height: 1200px;
+            transition: max-height 300ms ease;
+        }
+
+        .advanced-toggle {
+            width: fit-content;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 13px;
+            background: #f5f5f5;
+            color: var(--ink);
+            cursor: pointer;
+            margin-bottom: 8px;
+            transition: background-color 200ms ease;
+        }
+
+        .advanced-toggle:hover {
+            background: #e8e8e8;
+        }
+
+        body.mode-play .advanced-toggle {
+            background: #2a2a2a;
+            border-color: #404040;
+            color: #e6e6e6;
+        }
+
+        body.mode-play .advanced-toggle:hover {
+            background: #333333;
+        }
+
         .status {
             font-size: 13px;
             color: var(--muted);
@@ -1819,6 +1909,10 @@ internal sealed class LocalVideoServer : IDisposable
     <main class="shell">
         <section class="top">
             <div class="brand"><span class="dot"></span>MtVid Secure Player</div>
+            <div id="topControls" class="top-controls" style="display: none;">
+                <input id="topPassword" type="password" class="top-password-input" placeholder="Sifre" />
+                <button id="topOpenBtn" type="button" class="top-open-btn">Aç</button>
+            </div>
             <div class="meta">Protected in-memory playback | <a href="/encrypt">Sifreleme</a> | <a href="/play">Play</a></div>
         </section>
         <section class="body">
@@ -1880,26 +1974,24 @@ internal sealed class LocalVideoServer : IDisposable
                 <div class="play-layout">
                     <div>
                         <div class="panel">
-                            <div class="row">
-                                <label class="label" for="pkgFile">.mtaf dosyasi</label>
-                                <input id="pkgFile" type="file" accept=".mtaf,application/octet-stream" multiple />
-                            </div>
-                            <div class="row">
-                                <label class="label" for="pkgPathQuick">Buyuk dosya icin hizli acilis (disk yolu)</label>
-                                <input id="pkgPathQuick" type="text" placeholder="/Users/you/Videos/movie.mtaf" />
-                            </div>
-                            <button id="pickFastPathBtn" class="alt" type="button">Sistemden dosya sec (native)</button>
-                            <div class="row">
-                                <label class="label" for="pkgPassword">Sifre</label>
-                                <input id="pkgPassword" type="password" placeholder="Playback sifresi" />
-                            </div>
-                            <div class="row-grid">
-                                <button id="openBtn" type="button">Dosyayi Ac (Yukle)</button>
-                                <button id="openFastBtn" type="button">Hizli Ac (Yol)</button>
-                            </div>
-                            <div class="row-grid">
-                                <button id="queueBtn" class="alt" type="button">Listeye Ekle</button>
-                                <button id="pickPlaylistNativeBtn" class="alt" type="button">Native'den Listeye Ekle</button>
+                            <button id="advancedToggle" class="advanced-toggle">⊕ Advanced</button>
+                            <div id="advancedSection" class="advanced-section">
+                                <div class="row">
+                                    <label class="label" for="pkgFile">.mtaf dosyasi</label>
+                                    <input id="pkgFile" type="file" accept=".mtaf,application/octet-stream" multiple />
+                                </div>
+                                <div class="row">
+                                    <label class="label" for="pkgPathQuick">Buyuk dosya icin hizli acilis (disk yolu)</label>
+                                    <input id="pkgPathQuick" type="text" placeholder="/Users/you/Videos/movie.mtaf" />
+                                </div>
+                                <button id="pickFastPathBtn" class="alt" type="button">Sistemden dosya sec (native)</button>
+                                <div class="row-grid">
+                                    <button id="openBtn" type="button">Dosyayi Ac (Yukle)</button>
+                                    <button id="openFastBtn" type="button">Hizli Ac (Yol)</button>
+                                </div>
+                                <div class="row-grid">
+                                    <button id="queueBtn" class="alt" type="button">Listeye Ekle</button>
+                                </div>
                             </div>
                             <div class="progress-wrap"><div id="openProgressBar" class="progress-bar"></div></div>
                             <div id="status" class="status"></div>
@@ -1976,12 +2068,15 @@ internal sealed class LocalVideoServer : IDisposable
         const pkgFile = document.getElementById('pkgFile');
         const pkgPathQuick = document.getElementById('pkgPathQuick');
         const pickFastPathBtn = document.getElementById('pickFastPathBtn');
-        const passwordInput = document.getElementById('pkgPassword');
         const openBtn = document.getElementById('openBtn');
         const openFastBtn = document.getElementById('openFastBtn');
         const queueBtn = document.getElementById('queueBtn');
-        const pickPlaylistNativeBtn = document.getElementById('pickPlaylistNativeBtn');
         const clearPlaylistBtn = document.getElementById('clearPlaylistBtn');
+        const topPassword = document.getElementById('topPassword');
+        const topOpenBtn = document.getElementById('topOpenBtn');
+        const topControls = document.getElementById('topControls');
+        const advancedToggle = document.getElementById('advancedToggle');
+        const advancedSection = document.getElementById('advancedSection');
         const migratePlaylistBtn = document.getElementById('migratePlaylistBtn');
         const prevBtn = document.getElementById('prevBtn');
         const nextBtn = document.getElementById('nextBtn');
@@ -2007,8 +2102,18 @@ internal sealed class LocalVideoServer : IDisposable
             if (playSection) playSection.style.display = 'none';
         } else if (pageMode === 'play') {
             if (encryptSection) encryptSection.style.display = 'none';
+            if (topControls) topControls.style.display = 'flex';
         }
         document.body.classList.add(`mode-${pageMode}`);
+
+        // Advanced section toggle
+        advancedToggle?.addEventListener('click', () => {
+            if (advancedSection) {
+                advancedSection.classList.toggle('open');
+                const isOpen = advancedSection.classList.contains('open');
+                advancedToggle.textContent = isOpen ? '⊖ Advanced' : '⊕ Advanced';
+            }
+        });
 
         function updateNowPlaying() {
             if (!nowPlayingTitle || !nowPlayingMeta) {
@@ -2302,7 +2407,7 @@ internal sealed class LocalVideoServer : IDisposable
                 return;
             }
 
-            const password = passwordInput.value;
+            const password = topPassword.value;
             if (!password) {
                 throw new Error('Playlist oynatmak icin sifre gerekli.');
             }
@@ -2922,7 +3027,7 @@ internal sealed class LocalVideoServer : IDisposable
 
         openBtn.addEventListener('click', async () => {
             const file = pkgFile.files && pkgFile.files[0];
-            const password = passwordInput.value;
+            const password = topPassword.value;
             if (!file || !password) {
                 status.textContent = 'Dosya secimi ve sifre gerekli.';
                 return;
@@ -2972,42 +3077,56 @@ internal sealed class LocalVideoServer : IDisposable
             status.textContent = `Playlist guncellendi. Toplam ${playlist.length} dosya.`;
         });
 
-        pickPlaylistNativeBtn.addEventListener('click', async () => {
-            status.textContent = 'Native coklu secici aciliyor...';
+        topOpenBtn?.addEventListener('click', async () => {
+            status.textContent = 'Native dosya secici aciliyor...';
             try {
                 const res = await fetch('/api/pick-file?kind=mtaf&multi=true');
                 const data = await res.json();
-                if (!res.ok || !data.ok || !Array.isArray(data.paths)) {
-                    status.textContent = data.message || 'Dosyalar secilemedi.';
+                if (!res.ok || !data.ok) {
+                    status.textContent = data.message || 'Dosya secilemedi.';
                     return;
                 }
 
-                let added = 0;
-                for (const p of data.paths) {
-                    if (typeof p !== 'string' || !p.toLowerCase().endsWith('.mtaf')) {
-                        continue;
-                    }
+                const picked = Array.isArray(data.paths)
+                    ? data.paths
+                    : (typeof data.path === 'string' ? [data.path] : []);
+                const validPaths = picked
+                    .filter((p) => typeof p === 'string')
+                    .map((p) => p.trim())
+                    .filter((p) => p.length > 0 && p.toLowerCase().endsWith('.mtaf'));
 
-                    const fallbackName = p.split('/').pop() || p;
-                    const meta = await tryGetPackageMetaByPath(p);
-                    const name = meta.originalName || fallbackName;
-                    playlist.push({ path: p, name, thumbData: meta.thumbData || null, durationLabel: meta.durationLabel || '--:--', version: meta.version });
-                    added++;
-                }
-
-                if (added === 0) {
+                if (validPaths.length === 0) {
                     status.textContent = 'Secimden listeye eklenecek .mtaf bulunamadi.';
                     return;
                 }
 
+                const firstAddedIndex = playlist.length;
+                for (const p of validPaths) {
+                    const fallbackName = p.split('/').pop() || p;
+                    const meta = await tryGetPackageMetaByPath(p);
+                    const name = meta.originalName || fallbackName;
+                    playlist.push({ path: p, name, thumbData: meta.thumbData || null, durationLabel: meta.durationLabel || '--:--', version: meta.version });
+                }
+
                 if (currentPlaylistIndex < 0 && playlist.length > 0) {
-                    currentPlaylistIndex = 0;
+                    currentPlaylistIndex = firstAddedIndex;
                 }
 
                 renderPlaylist();
-                status.textContent = `Native secimden ${added} dosya eklendi. Toplam ${playlist.length}.`;
+
+                const password = topPassword.value;
+                if (!password) {
+                    status.textContent = `${validPaths.length} dosya playlist'e eklendi. Acmak icin sifre gir.`;
+                    return;
+                }
+
+                const firstPath = validPaths[0];
+                await openByPath(firstPath, password, 'native');
+                currentPlaylistIndex = firstAddedIndex;
+                renderPlaylist();
             } catch (err) {
-                status.textContent = err?.message || 'Native secici acilamadi.';
+                setOpenProgress(0);
+                status.textContent = err?.message || 'Dosya acilamadi.';
             }
         });
 
@@ -3028,7 +3147,7 @@ internal sealed class LocalVideoServer : IDisposable
                 return;
             }
 
-            const password = passwordInput.value;
+            const password = topPassword.value;
             if (!password) {
                 status.textContent = 'Migration icin once sifreyi gir.';
                 return;
@@ -3130,7 +3249,7 @@ internal sealed class LocalVideoServer : IDisposable
 
         openFastBtn.addEventListener('click', async () => {
             const packagePath = pkgPathQuick.value.trim();
-            const password = passwordInput.value;
+            const password = topPassword.value;
             if (!packagePath || !password) {
                 status.textContent = 'Disk yolu ve sifre gerekli.';
                 return;
@@ -3284,7 +3403,6 @@ internal sealed class LocalVideoServer : IDisposable
 
                 setPackProgress(100);
                 packStatus.textContent = `Olustu ve indirildi: ${safeName}`;
-                passwordInput.value = password;
             } catch (err) {
                 setPackProgress(0);
                 packStatus.textContent = err?.message || 'Sunucuya baglanilamadi.';
@@ -3383,7 +3501,6 @@ internal sealed class LocalVideoServer : IDisposable
                     ? `, silinen orijinal: ${deletedCount}`
                     : '';
                 batchStatus.textContent = `Tamamlandi. Toplam: ${files.length}${deleteMsg}`;
-                passwordInput.value = password;
             } catch (err) {
                 setBatchProgress(0);
                 const raw = err?.message || '';
