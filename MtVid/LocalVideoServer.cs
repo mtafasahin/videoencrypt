@@ -1483,7 +1483,7 @@ internal sealed class LocalVideoServer : IDisposable
             padding: 10px 12px;
             background: linear-gradient(180deg, #161f2b, #121a24);
             border-top: 1px solid #2a3647;
-            overflow-x: auto;
+            overflow: visible;
             flex-wrap: nowrap;
             scrollbar-width: thin;
         }
@@ -1527,6 +1527,58 @@ internal sealed class LocalVideoServer : IDisposable
             color: #e7eef8;
             padding: 5px 8px;
             font-size: 12px;
+        }
+
+        .control-seek-wrap {
+            position: relative;
+            flex: 1 1 280px;
+            min-width: 180px;
+            display: flex;
+            align-items: center;
+            margin: 0 4px;
+        }
+
+        .control-seek {
+            width: 100%;
+            accent-color: #78bcae;
+            cursor: pointer;
+        }
+
+        .seek-preview {
+            position: absolute;
+            left: 0;
+            bottom: calc(100% + 10px);
+            transform: translateX(-50%);
+            background: #0f1722f4;
+            border: 1px solid #38506e;
+            border-radius: 8px;
+            padding: 5px;
+            display: grid;
+            gap: 4px;
+            width: 164px;
+            pointer-events: none;
+            box-shadow: 0 12px 28px rgba(0, 0, 0, 0.38);
+            z-index: 5;
+        }
+
+        .seek-preview[hidden] {
+            display: none;
+        }
+
+        .seek-preview img {
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            object-fit: cover;
+            border-radius: 6px;
+            background: #0b0f16;
+        }
+
+        .seek-preview-time {
+            text-align: center;
+            color: #d7e4f7;
+            font-size: 11px;
+            font-variant-numeric: tabular-nums;
+            letter-spacing: .2px;
         }
 
         .control-time {
@@ -1951,6 +2003,11 @@ internal sealed class LocalVideoServer : IDisposable
             color: #cdcdcd;
         }
 
+        body.mode-play .seek-preview {
+            background: #151515f4;
+            border-color: #4a4a4a;
+        }
+
         body.mode-play .video-title {
             color: #f1f1f1;
         }
@@ -1988,6 +2045,8 @@ internal sealed class LocalVideoServer : IDisposable
             .player-controls { gap: 6px; padding: 8px 10px; }
             .control-volume { width: 78px; }
             .control-time { font-size: 11px; }
+            .control-seek-wrap { min-width: 140px; }
+            .seek-preview { width: 132px; }
         }
     </style>
 </head>
@@ -2092,6 +2151,13 @@ internal sealed class LocalVideoServer : IDisposable
                                     <button id="playPauseBtn" class="control-btn" type="button">Play</button>
                                     <button id="seekBackBtn" class="control-btn" type="button">-10s</button>
                                     <button id="seekForwardBtn" class="control-btn" type="button">+10s</button>
+                                    <div id="seekWrap" class="control-seek-wrap">
+                                        <input id="seekSlider" class="control-seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Video zaman cubugu" />
+                                        <div id="seekPreview" class="seek-preview" hidden>
+                                            <img id="seekPreviewImage" alt="Seek preview" />
+                                            <div id="seekPreviewTime" class="seek-preview-time">00:00</div>
+                                        </div>
+                                    </div>
                                     <button id="muteBtn" class="control-btn" type="button">Ses</button>
                                     <input id="volumeSlider" class="control-volume" type="range" min="0" max="100" value="100" step="1" aria-label="Ses seviyesi" />
                                     <label class="control-speed-wrap" for="speedSelect">Hiz
@@ -2200,6 +2266,11 @@ internal sealed class LocalVideoServer : IDisposable
         const playPauseBtn = document.getElementById('playPauseBtn');
         const seekBackBtn = document.getElementById('seekBackBtn');
         const seekForwardBtn = document.getElementById('seekForwardBtn');
+        const seekWrap = document.getElementById('seekWrap');
+        const seekSlider = document.getElementById('seekSlider');
+        const seekPreview = document.getElementById('seekPreview');
+        const seekPreviewImage = document.getElementById('seekPreviewImage');
+        const seekPreviewTime = document.getElementById('seekPreviewTime');
         const muteBtn = document.getElementById('muteBtn');
         const volumeSlider = document.getElementById('volumeSlider');
         const speedSelect = document.getElementById('speedSelect');
@@ -2213,6 +2284,18 @@ internal sealed class LocalVideoServer : IDisposable
         const playSection = document.getElementById('playSection');
         const playlist = [];
         let currentPlaylistIndex = -1;
+        let isSeeking = false;
+        const previewVideo = document.createElement('video');
+        previewVideo.muted = true;
+        previewVideo.playsInline = true;
+        previewVideo.preload = 'metadata';
+        let previewSource = '';
+        let previewTimer = null;
+        let previewBusy = false;
+        let pendingPreviewTime = null;
+        const previewCanvas = document.createElement('canvas');
+        previewCanvas.width = 160;
+        previewCanvas.height = 90;
 
         if (pageMode === 'encrypt') {
             if (playSection) playSection.style.display = 'none';
@@ -2269,6 +2352,14 @@ internal sealed class LocalVideoServer : IDisposable
                 speedSelect.value = String(video.playbackRate || 1);
             }
 
+            if (seekSlider && Number.isFinite(video.duration) && video.duration > 0) {
+                seekSlider.max = String(video.duration);
+                seekSlider.step = '0.05';
+                if (!isSeeking) {
+                    seekSlider.value = String(Math.min(video.duration, Math.max(0, video.currentTime || 0)));
+                }
+            }
+
             if (controlTime) {
                 const current = formatControlTime(video.currentTime || 0);
                 const total = formatControlTime(video.duration || 0);
@@ -2280,6 +2371,145 @@ internal sealed class LocalVideoServer : IDisposable
                 pipBtn.disabled = !pipSupported;
                 pipBtn.textContent = document.pictureInPictureElement ? 'PiP Cik' : 'PiP';
             }
+        }
+
+        function getSeekSecondsFromSlider() {
+            if (!seekSlider || !Number.isFinite(video.duration) || video.duration <= 0) {
+                return 0;
+            }
+
+            const value = Number(seekSlider.value);
+            if (!Number.isFinite(value)) {
+                return 0;
+            }
+
+            return Math.min(video.duration, Math.max(0, value));
+        }
+
+        function syncPreviewSource() {
+            const source = video.currentSrc || video.src || '';
+            if (!source || source === previewSource) {
+                return;
+            }
+
+            previewSource = source;
+            previewVideo.src = source;
+            previewVideo.load();
+        }
+
+        async function seekPreviewVideoTo(targetSeconds) {
+            if (!Number.isFinite(targetSeconds) || targetSeconds < 0) {
+                return false;
+            }
+
+            syncPreviewSource();
+            if (!previewSource) {
+                return false;
+            }
+
+            if (previewVideo.readyState < 1) {
+                await new Promise((resolve, reject) => {
+                    const onLoaded = () => {
+                        cleanup();
+                        resolve();
+                    };
+                    const onErr = () => {
+                        cleanup();
+                        reject(new Error('Preview metadata okunamadi.'));
+                    };
+                    const cleanup = () => {
+                        previewVideo.removeEventListener('loadedmetadata', onLoaded);
+                        previewVideo.removeEventListener('error', onErr);
+                    };
+
+                    previewVideo.addEventListener('loadedmetadata', onLoaded, { once: true });
+                    previewVideo.addEventListener('error', onErr, { once: true });
+                });
+            }
+
+            const safeTarget = Number.isFinite(previewVideo.duration) && previewVideo.duration > 0
+                ? Math.min(Math.max(0, targetSeconds), Math.max(0, previewVideo.duration - 0.05))
+                : Math.max(0, targetSeconds);
+
+            if (Math.abs((previewVideo.currentTime || 0) - safeTarget) > 0.03) {
+                await new Promise((resolve, reject) => {
+                    const onSeeked = () => {
+                        cleanup();
+                        resolve();
+                    };
+                    const onErr = () => {
+                        cleanup();
+                        reject(new Error('Preview seek hatasi.'));
+                    };
+                    const cleanup = () => {
+                        previewVideo.removeEventListener('seeked', onSeeked);
+                        previewVideo.removeEventListener('error', onErr);
+                    };
+
+                    previewVideo.addEventListener('seeked', onSeeked, { once: true });
+                    previewVideo.addEventListener('error', onErr, { once: true });
+                    previewVideo.currentTime = safeTarget;
+                });
+            }
+
+            return previewVideo.readyState >= 2;
+        }
+
+        async function renderSeekPreview(targetSeconds) {
+            if (!seekPreview || !seekPreviewImage || !seekPreviewTime) {
+                return;
+            }
+
+            if (previewBusy) {
+                pendingPreviewTime = targetSeconds;
+                return;
+            }
+
+            previewBusy = true;
+            try {
+                const ready = await seekPreviewVideoTo(targetSeconds);
+                if (ready && previewVideo.videoWidth > 0 && previewVideo.videoHeight > 0) {
+                    const ctx = previewCanvas.getContext('2d');
+                    if (ctx) {
+                        ctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+                        ctx.drawImage(previewVideo, 0, 0, previewCanvas.width, previewCanvas.height);
+                        seekPreviewImage.src = previewCanvas.toDataURL('image/jpeg', 0.76);
+                    }
+                }
+                seekPreviewTime.textContent = formatControlTime(targetSeconds);
+            } catch {
+                seekPreviewTime.textContent = formatControlTime(targetSeconds);
+            } finally {
+                previewBusy = false;
+            }
+
+            if (pendingPreviewTime !== null) {
+                const nextTarget = pendingPreviewTime;
+                pendingPreviewTime = null;
+                void renderSeekPreview(nextTarget);
+            }
+        }
+
+        function scheduleSeekPreview(targetSeconds) {
+            if (previewTimer) {
+                clearTimeout(previewTimer);
+                previewTimer = null;
+            }
+
+            previewTimer = setTimeout(() => {
+                previewTimer = null;
+                void renderSeekPreview(targetSeconds);
+            }, 70);
+        }
+
+        function updateSeekPreviewPosition(clientX) {
+            if (!seekWrap || !seekPreview) {
+                return;
+            }
+
+            const rect = seekWrap.getBoundingClientRect();
+            const localX = Math.max(0, Math.min(rect.width, clientX - rect.left));
+            seekPreview.style.left = `${localX}px`;
         }
 
         function setupPlayerControls() {
@@ -2317,6 +2547,90 @@ internal sealed class LocalVideoServer : IDisposable
                 video.currentTime = next;
                 updatePlayerControlState();
             });
+
+            seekSlider?.addEventListener('input', () => {
+                isSeeking = true;
+                const target = getSeekSecondsFromSlider();
+                video.currentTime = target;
+                if (controlTime) {
+                    const total = formatControlTime(video.duration || 0);
+                    controlTime.textContent = `${formatControlTime(target)} / ${total}`;
+                }
+            });
+
+            seekSlider?.addEventListener('change', () => {
+                const target = getSeekSecondsFromSlider();
+                video.currentTime = target;
+                isSeeking = false;
+                updatePlayerControlState();
+            });
+
+            seekSlider?.addEventListener('pointerdown', () => {
+                isSeeking = true;
+            });
+
+            const stopSeeking = () => {
+                const target = getSeekSecondsFromSlider();
+                video.currentTime = target;
+                isSeeking = false;
+                updatePlayerControlState();
+            };
+            seekSlider?.addEventListener('pointerup', stopSeeking);
+            seekSlider?.addEventListener('keyup', (evt) => {
+                if (evt.key === 'ArrowLeft' || evt.key === 'ArrowRight' || evt.key === 'Home' || evt.key === 'End') {
+                    const target = getSeekSecondsFromSlider();
+                    video.currentTime = target;
+                }
+                stopSeeking();
+            });
+
+            const handleSeekPreviewPointer = (clientX) => {
+                if (!seekSlider || !seekPreview || !Number.isFinite(video.duration) || video.duration <= 0) {
+                    return;
+                }
+
+                const rect = seekSlider.getBoundingClientRect();
+                if (rect.width <= 0) {
+                    return;
+                }
+
+                const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+                const target = ratio * video.duration;
+                seekPreview.hidden = false;
+                updateSeekPreviewPosition(clientX);
+                scheduleSeekPreview(target);
+            };
+
+            seekSlider?.addEventListener('mousemove', (evt) => {
+                handleSeekPreviewPointer(evt.clientX);
+            });
+            seekSlider?.addEventListener('pointermove', (evt) => {
+                handleSeekPreviewPointer(evt.clientX);
+            });
+
+            seekWrap?.addEventListener('mouseenter', (evt) => {
+                handleSeekPreviewPointer(evt.clientX);
+            });
+            seekWrap?.addEventListener('pointermove', (evt) => {
+                handleSeekPreviewPointer(evt.clientX);
+            });
+            seekWrap?.addEventListener('mouseleave', () => {
+                if (seekPreview) {
+                    seekPreview.hidden = true;
+                }
+            });
+
+            seekSlider?.addEventListener('mouseleave', () => {
+                if (seekPreview) {
+                    seekPreview.hidden = true;
+                }
+            });
+
+            seekSlider?.addEventListener('touchstart', () => {
+                if (seekPreview) {
+                    seekPreview.hidden = true;
+                }
+            }, { passive: true });
 
             muteBtn?.addEventListener('click', () => {
                 video.muted = !video.muted;
@@ -2382,6 +2696,13 @@ internal sealed class LocalVideoServer : IDisposable
                         host.webkitRequestFullscreen();
                     }
                 } catch {
+                }
+            });
+
+            video.addEventListener('emptied', () => {
+                previewSource = '';
+                if (seekPreviewImage) {
+                    seekPreviewImage.removeAttribute('src');
                 }
             });
 
