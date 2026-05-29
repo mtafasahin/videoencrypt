@@ -458,6 +458,15 @@ internal sealed class LocalVideoServer : IDisposable
             string sourceName = context.Request.Headers["X-File-Name"] ?? "video.bin";
             string outputName = context.Request.Headers["X-Output-Name"] ?? BuildAbbreviatedMtafName(sourceName);
             string thumbnailId = context.Request.Headers["X-Thumbnail-Id"] ?? string.Empty;
+            double? durationSeconds = null;
+            string? durationHeader = context.Request.Headers["X-Duration-Seconds"];
+            if (!string.IsNullOrWhiteSpace(durationHeader)
+                && double.TryParse(durationHeader, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double parsedDuration)
+                && double.IsFinite(parsedDuration)
+                && parsedDuration >= 0)
+            {
+                durationSeconds = parsedDuration;
+            }
             int chunkMb = 2;
             string? chunkHeader = context.Request.Headers["X-Chunk-Mb"];
             if (!string.IsNullOrWhiteSpace(chunkHeader) && (!int.TryParse(chunkHeader, out chunkMb) || chunkMb is <= 0 or > 32))
@@ -493,6 +502,7 @@ internal sealed class LocalVideoServer : IDisposable
                 SourceContentType = contentType,
                 SourceFileName = Path.GetFileName(sourceName),
                 SourceThumbnailJpeg = thumbnailJpeg,
+                SourceDurationSeconds = durationSeconds,
                 State = "processing",
                 ProgressPercent = 0
             };
@@ -607,7 +617,8 @@ internal sealed class LocalVideoServer : IDisposable
                     job.ProgressPercent = percent;
                 },
                 job.SourceFileName,
-                job.SourceThumbnailJpeg);
+                job.SourceThumbnailJpeg,
+                job.SourceDurationSeconds);
 
             job.ProgressPercent = 100;
             job.State = "completed";
@@ -717,7 +728,9 @@ internal sealed class LocalVideoServer : IDisposable
                 originalFileName = header.OriginalFileName,
                 hasOriginalFileName = !string.IsNullOrWhiteSpace(header.OriginalFileName),
                 thumbnailJpegBase64 = header.ThumbnailJpeg is { Length: > 0 } ? Convert.ToBase64String(header.ThumbnailJpeg) : null,
-                hasThumbnail = header.ThumbnailJpeg is { Length: > 0 }
+                hasThumbnail = header.ThumbnailJpeg is { Length: > 0 },
+                durationSeconds = header.DurationSeconds,
+                hasDuration = header.DurationSeconds.HasValue
             });
         }
         catch (FileNotFoundException ex)
@@ -1208,7 +1221,7 @@ internal sealed class LocalVideoServer : IDisposable
             font-size: 13px;
             letter-spacing: .2px;
             display: grid;
-            grid-template-columns: 36px 76px minmax(0, 1fr);
+            grid-template-columns: 36px 96px minmax(0, 1fr);
             gap: 10px;
             align-items: center;
         }
@@ -1246,7 +1259,7 @@ internal sealed class LocalVideoServer : IDisposable
         }
 
         .playlist-thumb img {
-            width: 100%;
+            width: 96px;
             height: 100%;
             object-fit: cover;
             display: block;
@@ -1257,6 +1270,7 @@ internal sealed class LocalVideoServer : IDisposable
             box-shadow: 0 0 0 2px #57c2ad33;
             color: #fff;
         }
+            position: relative;
 
         .playlist-btn.current .playlist-idx {
             background: linear-gradient(135deg, #49b9a3, #78e0c8);
@@ -1265,11 +1279,41 @@ internal sealed class LocalVideoServer : IDisposable
 
         .check-row {
             display: flex;
+
+        .playlist-duration {
+            position: absolute;
+            right: 4px;
+            bottom: 4px;
+            padding: 2px 5px;
+            border-radius: 5px;
+            background: #000000cc;
+            color: #f2f7ff;
+            font-size: 10px;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .playlist-text {
+            min-width: 0;
+            display: grid;
+            gap: 4px;
+        }
             gap: 8px;
             align-items: center;
-            color: var(--muted);
+            white-space: nowrap;
             font-size: 13px;
         }
+            font-size: 13px;
+            font-weight: 700;
+            color: #edf4ff;
+        }
+
+        .playlist-meta {
+            color: #9eb0c5;
+            font-size: 11px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
 
         .now-playing {
             margin-bottom: 10px;
@@ -1612,6 +1656,22 @@ internal sealed class LocalVideoServer : IDisposable
             nowPlayingMeta.textContent = `${currentPlaylistIndex + 1}/${playlist.length}`;
         }
 
+        function formatDurationLabel(value) {
+            if (!Number.isFinite(value) || value <= 0) {
+                return '--:--';
+            }
+
+            const total = Math.floor(value);
+            const h = Math.floor(total / 3600);
+            const m = Math.floor((total % 3600) / 60);
+            const s = total % 60;
+            if (h > 0) {
+                return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+            }
+
+            return `${m}:${String(s).padStart(2, '0')}`;
+        }
+
         function renderPlaylist() {
             if (!playlistList) {
                 return;
@@ -1640,13 +1700,27 @@ internal sealed class LocalVideoServer : IDisposable
                     thumb.textContent = 'FRAME';
                 }
 
+                const duration = document.createElement('span');
+                duration.className = 'playlist-duration';
+                duration.textContent = item.durationLabel || '--:--';
+                thumb.appendChild(duration);
+
+                const textWrap = document.createElement('span');
+                textWrap.className = 'playlist-text';
+
                 const name = document.createElement('span');
                 name.className = 'playlist-name';
                 name.textContent = item.name;
 
+                const meta = document.createElement('span');
+                meta.className = 'playlist-meta';
+                meta.textContent = i === currentPlaylistIndex ? 'Simdi oynatiliyor' : `Parca ${i + 1}`;
+                textWrap.appendChild(name);
+                textWrap.appendChild(meta);
+
                 btn.appendChild(idx);
                 btn.appendChild(thumb);
-                btn.appendChild(name);
+                btn.appendChild(textWrap);
                 btn.onclick = async () => {
                     try {
                         await playPlaylistIndex(i);
@@ -1704,8 +1778,12 @@ internal sealed class LocalVideoServer : IDisposable
             }
 
             currentPlaylistIndex = index;
+            const playingItem = playlist[index];
+            if (!playingItem.durationLabel) {
+                playingItem.durationLabel = '--:--';
+            }
             renderPlaylist();
-            const item = playlist[index];
+            const item = playingItem;
             if (item.file) {
                 await openByUpload(item.file, password);
                 return;
@@ -1791,16 +1869,16 @@ internal sealed class LocalVideoServer : IDisposable
                 let offset = 0;
 
                 if (bytes.length < 4 || bytes[0] !== 0x4d || bytes[1] !== 0x54 || bytes[2] !== 0x41 || bytes[3] !== 0x46) {
-                    return { originalName: null, thumbData: null };
+                    return { originalName: null, thumbData: null, durationLabel: '--:--' };
                 }
 
                 offset += 4;
-                if (offset >= view.byteLength) return { originalName: null, thumbData: null };
+                if (offset >= view.byteLength) return { originalName: null, thumbData: null, durationLabel: '--:--' };
                 const version = view.getUint8(offset);
                 offset += 1;
 
-                if (version !== 1 && version !== 2 && version !== 3) {
-                    return { originalName: null, thumbData: null };
+                if (version !== 1 && version !== 2 && version !== 3 && version !== 4) {
+                    return { originalName: null, thumbData: null, durationLabel: '--:--' };
                 }
 
                 offset += 4; // chunk size
@@ -1810,15 +1888,15 @@ internal sealed class LocalVideoServer : IDisposable
                 offset += 16; // salt
                 offset += 4; // nonce prefix
                 offset += 16; // verifier
-                if (offset >= view.byteLength) return { originalName: null, thumbData: null };
+                if (offset >= view.byteLength) return { originalName: null, thumbData: null, durationLabel: '--:--' };
 
                 const ctLen = view.getUint8(offset);
                 offset += 1 + ctLen;
-                if (offset > view.byteLength) return { originalName: null, thumbData: null };
+                if (offset > view.byteLength) return { originalName: null, thumbData: null, durationLabel: '--:--' };
 
                 let originalName = null;
                 if (version >= 2) {
-                    if (offset + 2 > view.byteLength) return { originalName: null, thumbData: null };
+                    if (offset + 2 > view.byteLength) return { originalName: null, thumbData: null, durationLabel: '--:--' };
                     const nameLen = view.getUint16(offset, true);
                     offset += 2;
                     if (nameLen > 0 && offset + nameLen <= view.byteLength) {
@@ -1832,18 +1910,28 @@ internal sealed class LocalVideoServer : IDisposable
 
                 let thumbData = null;
                 if (version >= 3) {
-                    if (offset + 4 > view.byteLength) return { originalName, thumbData: null };
+                    if (offset + 4 > view.byteLength) return { originalName, thumbData: null, durationLabel: '--:--' };
                     const thumbLen = view.getInt32(offset, true);
                     offset += 4;
                     if (thumbLen > 0 && offset + thumbLen <= view.byteLength) {
                         const thumbBytes = bytes.slice(offset, offset + thumbLen);
                         thumbData = `data:image/jpeg;base64,${bytesToBase64(thumbBytes)}`;
                     }
+
+                    offset += Math.max(0, thumbLen);
                 }
 
-                return { originalName, thumbData };
+                let durationLabel = '--:--';
+                if (version >= 4 && offset + 8 <= view.byteLength) {
+                    const durationSeconds = view.getFloat64(offset, true);
+                    if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+                        durationLabel = formatDurationLabel(durationSeconds);
+                    }
+                }
+
+                return { originalName, thumbData, durationLabel };
             } catch {
-                return { originalName: null, thumbData: null };
+                return { originalName: null, thumbData: null, durationLabel: '--:--' };
             }
         }
 
@@ -1857,17 +1945,19 @@ internal sealed class LocalVideoServer : IDisposable
 
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok || !data?.ok) {
-                    return { originalName: null, thumbData: null };
+                    return { originalName: null, thumbData: null, durationLabel: '--:--' };
                 }
 
                 const value = typeof data.originalFileName === 'string' ? data.originalFileName.trim() : '';
                 const thumbBase64 = typeof data.thumbnailJpegBase64 === 'string' ? data.thumbnailJpegBase64.trim() : '';
+                const durationSeconds = Number(data.durationSeconds);
                 return {
                     originalName: value || null,
-                    thumbData: thumbBase64 ? `data:image/jpeg;base64,${thumbBase64}` : null
+                    thumbData: thumbBase64 ? `data:image/jpeg;base64,${thumbBase64}` : null,
+                    durationLabel: Number.isFinite(durationSeconds) && durationSeconds > 0 ? formatDurationLabel(durationSeconds) : '--:--'
                 };
             } catch {
-                return { originalName: null, thumbData: null };
+                return { originalName: null, thumbData: null, durationLabel: '--:--' };
             }
         }
 
@@ -1946,6 +2036,47 @@ internal sealed class LocalVideoServer : IDisposable
             }
         }
 
+        async function readDurationFromVideoFile(file) {
+            if (!file) {
+                return null;
+            }
+
+            const objectUrl = URL.createObjectURL(file);
+            try {
+                const probe = document.createElement('video');
+                probe.preload = 'metadata';
+                probe.muted = true;
+                probe.playsInline = true;
+
+                const duration = await new Promise((resolve) => {
+                    const onLoaded = () => {
+                        cleanup();
+                        const value = Number.isFinite(probe.duration) && probe.duration > 0 ? probe.duration : null;
+                        resolve(value);
+                    };
+
+                    const onError = () => {
+                        cleanup();
+                        resolve(null);
+                    };
+
+                    const cleanup = () => {
+                        probe.removeEventListener('loadedmetadata', onLoaded);
+                        probe.removeEventListener('error', onError);
+                    };
+
+                    probe.addEventListener('loadedmetadata', onLoaded, { once: true });
+                    probe.addEventListener('error', onError, { once: true });
+                    probe.src = objectUrl;
+                    probe.load();
+                });
+
+                return duration;
+            } finally {
+                URL.revokeObjectURL(objectUrl);
+            }
+        }
+
         async function uploadThumbnailBytes(thumbBytes) {
             const res = await fetch('/api/thumbnail-upload', {
                 method: 'POST',
@@ -1961,7 +2092,7 @@ internal sealed class LocalVideoServer : IDisposable
             return String(data.thumbnailId);
         }
 
-        async function startPackJobForFile(file, outputName, password, parsedChunk, onUploadProgress, thumbnailId = null) {
+        async function startPackJobForFile(file, outputName, password, parsedChunk, onUploadProgress, thumbnailId = null, durationSeconds = null) {
             const result = await new Promise((resolve, reject) => {
                 const xhr = new XMLHttpRequest();
                 xhr.open('POST', '/api/pack-upload');
@@ -1971,6 +2102,9 @@ internal sealed class LocalVideoServer : IDisposable
                 xhr.setRequestHeader('X-File-Name', file.name);
                 if (thumbnailId) {
                     xhr.setRequestHeader('X-Thumbnail-Id', thumbnailId);
+                }
+                if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+                    xhr.setRequestHeader('X-Duration-Seconds', String(durationSeconds));
                 }
                 xhr.setRequestHeader('Content-Type', 'application/octet-stream');
 
@@ -2159,7 +2293,7 @@ internal sealed class LocalVideoServer : IDisposable
                 }
 
                 const meta = await tryGetPackageMetaFromPackageFile(file);
-                playlist.push({ file, name: meta.originalName || file.name, thumbData: meta.thumbData || null });
+                playlist.push({ file, name: meta.originalName || file.name, thumbData: meta.thumbData || null, durationLabel: meta.durationLabel || '--:--' });
                 added++;
             }
 
@@ -2195,7 +2329,7 @@ internal sealed class LocalVideoServer : IDisposable
                     const fallbackName = p.split('/').pop() || p;
                     const meta = await tryGetPackageMetaByPath(p);
                     const name = meta.originalName || fallbackName;
-                    playlist.push({ path: p, name, thumbData: meta.thumbData || null });
+                    playlist.push({ path: p, name, thumbData: meta.thumbData || null, durationLabel: meta.durationLabel || '--:--' });
                     added++;
                 }
 
@@ -2320,6 +2454,16 @@ internal sealed class LocalVideoServer : IDisposable
             captureThumbnailForCurrentItem();
         });
 
+        video.addEventListener('loadedmetadata', () => {
+            if (currentPlaylistIndex < 0 || currentPlaylistIndex >= playlist.length) {
+                return;
+            }
+
+            const item = playlist[currentPlaylistIndex];
+            item.durationLabel = formatDurationLabel(video.duration);
+            renderPlaylist();
+        });
+
         videoInput.addEventListener('change', () => {
             const file = videoInput.files && videoInput.files[0];
             if (!file) {
@@ -2352,6 +2496,7 @@ internal sealed class LocalVideoServer : IDisposable
             try {
                 let thumbnailId = null;
                 const thumbSecond = parseThumbnailSecond(packThumbSecond?.value, 10);
+                const sourceDuration = await readDurationFromVideoFile(file);
                 packStatus.textContent = `Thumbnail aliniyor (${thumbSecond.toFixed(1)}s)...`;
                 const thumbBytes = await captureThumbnailJpegFromVideoFile(file, thumbSecond);
                 if (thumbBytes) {
@@ -2363,7 +2508,7 @@ internal sealed class LocalVideoServer : IDisposable
                     const p = Math.floor(uploadPercent * 0.35);
                     setPackProgress(p);
                     packStatus.textContent = `Yukleniyor... ${Math.floor(uploadPercent)}%`;
-                }, thumbnailId);
+                }, thumbnailId, sourceDuration);
                 if (!jobId) {
                     throw new Error('Job id alinamadi.');
                 }
@@ -2442,6 +2587,7 @@ internal sealed class LocalVideoServer : IDisposable
                     const outName = toDefaultOutputName(current.name);
 
                     batchStatus.textContent = `${i + 1}/${files.length} isleniyor: ${current.name} (yukleniyor)`;
+                    const sourceDuration = await readDurationFromVideoFile(file);
                     let thumbnailId = null;
                     try {
                         const thumbBytes = await captureThumbnailJpegFromVideoFile(file, batchThumbAtSecond);
@@ -2455,7 +2601,7 @@ internal sealed class LocalVideoServer : IDisposable
                         const within = Math.floor(uploadPercent * 0.35);
                         const total = ((i + (within / 100)) / files.length) * 100;
                         setBatchProgress(total);
-                    }, thumbnailId);
+                    }, thumbnailId, sourceDuration);
 
                     await waitPackJob(jobId, (encPercent) => {
                         const within = 35 + Math.floor(encPercent * 0.65);
@@ -2680,6 +2826,7 @@ internal sealed class LocalVideoServer : IDisposable
                 public required string SourceContentType { get; init; }
                 public required string SourceFileName { get; init; }
                 public byte[]? SourceThumbnailJpeg { get; init; }
+                public double? SourceDurationSeconds { get; init; }
                 public volatile int ProgressPercent;
                 public volatile string State = "processing";
                 public string? ErrorMessage;

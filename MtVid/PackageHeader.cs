@@ -8,7 +8,7 @@ internal sealed class PackageHeader
 {
     private static readonly byte[] Magic = "MTAF"u8.ToArray();
 
-    public const byte CurrentVersion = 3;
+    public const byte CurrentVersion = 4;
     public const int SaltSizeBytes = 16;
     public const int NoncePrefixSizeBytes = 4;
     public const int PasswordVerifierSizeBytes = 16;
@@ -26,6 +26,7 @@ internal sealed class PackageHeader
     public string ContentType { get; init; } = "application/octet-stream";
     public string? OriginalFileName { get; init; }
     public byte[]? ThumbnailJpeg { get; init; }
+    public double? DurationSeconds { get; init; }
     public long HeaderSize { get; init; }
 
     public void WriteTo(Stream stream)
@@ -96,6 +97,12 @@ internal sealed class PackageHeader
             writer.Write(thumbnailBytes.Length);
             writer.Write(thumbnailBytes);
         }
+
+        if (Version >= 4)
+        {
+            double duration = DurationSeconds.GetValueOrDefault(-1d);
+            writer.Write(duration);
+        }
     }
 
     public static PackageHeader ReadFrom(Stream stream)
@@ -125,6 +132,7 @@ internal sealed class PackageHeader
         byte[] contentTypeBytes = reader.ReadBytes(contentTypeLength);
         string? originalFileName = null;
         byte[]? thumbnailJpeg = null;
+        double? durationSeconds = null;
 
         if (version >= 2)
         {
@@ -162,6 +170,15 @@ internal sealed class PackageHeader
             }
         }
 
+        if (version >= 4)
+        {
+            double rawDuration = reader.ReadDouble();
+            if (double.IsFinite(rawDuration) && rawDuration >= 0)
+            {
+                durationSeconds = rawDuration;
+            }
+        }
+
         if (salt.Length != SaltSizeBytes || noncePrefix.Length != NoncePrefixSizeBytes || verifier.Length != PasswordVerifierSizeBytes || contentTypeBytes.Length != contentTypeLength)
         {
             throw new InvalidDataException("Package header is truncated or corrupted.");
@@ -185,6 +202,7 @@ internal sealed class PackageHeader
             ContentType = Encoding.UTF8.GetString(contentTypeBytes),
             OriginalFileName = originalFileName,
             ThumbnailJpeg = thumbnailJpeg,
+            DurationSeconds = durationSeconds,
             HeaderSize = stream.Position
         };
     }

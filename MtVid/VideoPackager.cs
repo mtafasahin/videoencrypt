@@ -13,7 +13,8 @@ internal static class VideoPackager
         int iterations,
         Action<long, long>? onProgress = null,
         string? originalFileName = null,
-        byte[]? thumbnailJpeg = null)
+        byte[]? thumbnailJpeg = null,
+        double? durationSeconds = null)
     {
         if (!File.Exists(inputVideoPath))
         {
@@ -45,7 +46,8 @@ internal static class VideoPackager
                 OriginalFileName = string.IsNullOrWhiteSpace(originalFileName)
                     ? Path.GetFileName(inputVideoPath)
                     : Path.GetFileName(originalFileName),
-                ThumbnailJpeg = thumbnailJpeg
+                ThumbnailJpeg = thumbnailJpeg,
+                DurationSeconds = durationSeconds
             };
 
             using FileStream output = new(outputPackagePath, FileMode.Create, FileAccess.Write, FileShare.None);
