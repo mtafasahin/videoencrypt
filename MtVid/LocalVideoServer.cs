@@ -343,7 +343,14 @@ internal sealed class LocalVideoServer : IDisposable
             }
 
             string contentType = GuessContentType(payload.InputPath);
-            VideoPackager.EncryptVideo(payload.InputPath, payload.OutputPath, payload.Password, chunkMb * 1024 * 1024, contentType, iterations);
+            VideoPackager.EncryptVideo(
+                payload.InputPath,
+                payload.OutputPath,
+                payload.Password,
+                chunkMb * 1024 * 1024,
+                contentType,
+                iterations,
+                originalFileName: Path.GetFileName(payload.InputPath));
 
             WriteJson(context.Response, HttpStatusCode.OK, new
             {
@@ -469,6 +476,7 @@ internal sealed class LocalVideoServer : IDisposable
                 OutputPath = tempOutput,
                 OutputFileName = SanitizeFileName(outputName),
                 SourceContentType = contentType,
+                SourceFileName = Path.GetFileName(sourceName),
                 State = "processing",
                 ProgressPercent = 0
             };
@@ -581,7 +589,8 @@ internal sealed class LocalVideoServer : IDisposable
 
                     int percent = (int)Math.Clamp((processedBytes * 100L) / totalBytes, 0, 100);
                     job.ProgressPercent = percent;
-                });
+                },
+                job.SourceFileName);
 
             job.ProgressPercent = 100;
             job.State = "completed";
@@ -2341,6 +2350,7 @@ internal sealed class LocalVideoServer : IDisposable
                 public required string OutputPath { get; init; }
                 public required string OutputFileName { get; init; }
                 public required string SourceContentType { get; init; }
+                public required string SourceFileName { get; init; }
                 public volatile int ProgressPercent;
                 public volatile string State = "processing";
                 public string? ErrorMessage;

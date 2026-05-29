@@ -52,7 +52,7 @@ internal static class Program
 		string password = GetOption(options, "password", "p") ?? PasswordPrompt.Read("Package password: ");
 		int chunkSizeBytes = checked(chunkSizeMb * 1024 * 1024);
 
-		VideoPackager.EncryptVideo(inputPath, outputPath, password, chunkSizeBytes, contentType, iterations);
+		VideoPackager.EncryptVideo(inputPath, outputPath, password, chunkSizeBytes, contentType, iterations, originalFileName: Path.GetFileName(inputPath));
 		Console.WriteLine($"Package created: {outputPath}");
 		return 0;
 	}
