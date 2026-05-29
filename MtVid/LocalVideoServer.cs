@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace MtVid;
 
@@ -429,7 +430,7 @@ internal sealed class LocalVideoServer : IDisposable
 
             string password = context.Request.Headers["X-Password"] ?? string.Empty;
             string sourceName = context.Request.Headers["X-File-Name"] ?? "video.bin";
-            string outputName = context.Request.Headers["X-Output-Name"] ?? (Path.GetFileNameWithoutExtension(sourceName) + ".mtaf");
+            string outputName = context.Request.Headers["X-Output-Name"] ?? BuildAbbreviatedMtafName(sourceName);
             int chunkMb = 2;
             string? chunkHeader = context.Request.Headers["X-Chunk-Mb"];
             if (!string.IsNullOrWhiteSpace(chunkHeader) && (!int.TryParse(chunkHeader, out chunkMb) || chunkMb is <= 0 or > 32))
@@ -1515,10 +1516,22 @@ internal sealed class LocalVideoServer : IDisposable
             openProgressBar.style.width = `${v}%`;
         }
 
+        function abbreviateFileBaseName(baseName) {
+            return baseName.replace(/[^.\s_]+/g, (token) => {
+                const chars = [...token];
+                if (chars.length <= 2) {
+                    return token;
+                }
+
+                return `${chars[0]}${chars[chars.length - 1]}`;
+            });
+        }
+
         function toDefaultOutputName(fileName) {
             const dot = fileName.lastIndexOf('.');
             const baseName = dot > 0 ? fileName.slice(0, dot) : fileName;
-            return `${baseName}.mtaf`;
+            const abbreviated = abbreviateFileBaseName(baseName);
+            return `${abbreviated}.mtaf`;
         }
 
         async function startPackJobForFile(file, outputName, password, parsedChunk, onUploadProgress) {
@@ -1881,7 +1894,7 @@ internal sealed class LocalVideoServer : IDisposable
 
         packBtn.addEventListener('click', async () => {
             const file = videoInput.files && videoInput.files[0];
-            const outputPath = mtafOutput.value.trim();
+            const outputPath = mtafOutput.value.trim() || (file ? toDefaultOutputName(file.name) : '');
             const password = packPassword.value;
             const parsedChunk = Number.parseInt(chunkMb.value, 10);
 
@@ -1889,6 +1902,8 @@ internal sealed class LocalVideoServer : IDisposable
                 packStatus.textContent = 'Video secimi, cikti adi ve sifre gerekli.';
                 return;
             }
+
+            mtafOutput.value = outputPath;
 
             if (!Number.isInteger(parsedChunk) || parsedChunk <= 0 || parsedChunk > 32) {
                 packStatus.textContent = 'Chunk MB 1-32 araliginda olmali.';
@@ -2099,6 +2114,28 @@ internal sealed class LocalVideoServer : IDisposable
                 }
 
                 return input;
+            }
+
+            private static string BuildAbbreviatedMtafName(string sourceFileName)
+            {
+                string baseName = Path.GetFileNameWithoutExtension(sourceFileName);
+                if (string.IsNullOrWhiteSpace(baseName))
+                {
+                    baseName = "video";
+                }
+
+                string abbreviated = Regex.Replace(baseName, @"[^.\s_]+", static match =>
+                {
+                    string token = match.Value;
+                    if (token.Length <= 2)
+                    {
+                        return token;
+                    }
+
+                    return string.Concat(token[0], token[^1]);
+                });
+
+                return SanitizeFileName($"{abbreviated}.mtaf");
             }
 
             private static string GuessContentType(string inputPath)
