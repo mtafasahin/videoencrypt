@@ -1431,8 +1431,8 @@ internal sealed class LocalVideoServer : IDisposable
             text-align: left;
             border-radius: 8px;
             padding: 6px 8px;
-            border: 1px solid #2d3a4f;
-            background: linear-gradient(180deg, #131c28, #0f1722);
+            border: 1px solid transparent;
+            background: transparent;
             color: #dfe8f3;
             font-family: "Roboto", "Avenir Next", "Segoe UI", sans-serif;
             font-size: 12px;
@@ -1442,15 +1442,43 @@ internal sealed class LocalVideoServer : IDisposable
             align-items: center;
         }
 
+        .playlist-btn:hover {
+            background: #ffffff0d;
+        }
+
         .playlist-info-btn {
-            border-radius: 8px;
-            padding: 6px 8px;
-            font-size: 11px;
-            min-width: 52px;
-            background: linear-gradient(135deg, #2a3444, #1f2937);
-            border: 1px solid #4f637f55;
-            color: #dfe8f5;
+            width: 24px;
+            height: 24px;
+            min-width: 24px;
+            border-radius: 999px;
+            padding: 0;
+            font-size: 16px;
+            font-weight: 700;
+            line-height: 1;
+            display: grid;
+            place-items: center;
+            background: transparent;
+            border: 1px solid transparent;
+            color: #a6a6a6;
             font-family: "Roboto", "Avenir Next", "Segoe UI", sans-serif;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity .16s ease, background-color .16s ease, color .16s ease;
+        }
+
+        .playlist-row:hover .playlist-info-btn,
+        .playlist-row:focus-within .playlist-info-btn,
+        .playlist-row.current-row .playlist-info-btn {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .playlist-info-btn:hover,
+        .playlist-info-btn:focus-visible {
+            background: #ffffff1f;
+            border-color: #ffffff24;
+            color: #f0f0f0;
+            outline: none;
         }
 
         .playlist-idx {
@@ -1482,12 +1510,12 @@ internal sealed class LocalVideoServer : IDisposable
             width: 100px;
             aspect-ratio: 16 / 9;
             border-radius: 8px;
-            background: linear-gradient(135deg, #2c3b4f, #1d2733);
-            border: 1px solid #32465f;
+            background: linear-gradient(135deg, #2a2a2a, #1b1b1b);
+            border: 1px solid #3a3a3a;
             overflow: hidden;
             display: grid;
             place-items: center;
-            color: #8ea1b7;
+            color: #b4b4b4;
             font-size: 10px;
             letter-spacing: .3px;
         }
@@ -1500,14 +1528,36 @@ internal sealed class LocalVideoServer : IDisposable
         }
 
         .playlist-btn.current {
-            border-color: #57c2ad;
-            box-shadow: 0 0 0 2px #57c2ad33;
+            border-color: transparent;
+            background: #ffffff14;
+            box-shadow: none;
             color: #fff;
         }
 
+        .playlist-btn.current:hover {
+            background: #ffffff1a;
+        }
+
         .playlist-btn.current .playlist-idx {
-            background: linear-gradient(135deg, #49b9a3, #78e0c8);
-            color: #032019;
+            background: #ffffff1f;
+            color: #f4f4f4;
+        }
+
+        .playlist-btn.current .playlist-meta {
+            color: #c8c8c8;
+        }
+
+        .playlist-row.current-row .playlist-info-btn {
+            border-color: transparent;
+            background: transparent;
+            color: #f1f1f1;
+        }
+
+        @media (any-pointer: coarse) {
+            .playlist-info-btn {
+                opacity: 1;
+                pointer-events: auto;
+            }
         }
 
         .check-row {
@@ -1655,18 +1705,18 @@ internal sealed class LocalVideoServer : IDisposable
 
         body.mode-play {
             background:
-                radial-gradient(1200px 600px at 80% -10%, #2a385655 0%, transparent 64%),
-                radial-gradient(1200px 600px at -10% 110%, #1f5b5755 0%, transparent 66%),
-                linear-gradient(140deg, #0a0f16, #101722 40%, #0f1722 100%);
-            color: #e8eef8;
+                radial-gradient(1200px 600px at 80% -10%, #2b2b2b55 0%, transparent 64%),
+                radial-gradient(1200px 600px at -10% 110%, #1c1c1c66 0%, transparent 66%),
+                linear-gradient(140deg, #0f0f0f, #171717 42%, #111111 100%);
+            color: #f1f1f1;
         }
 
         body.mode-play .top {
             position: sticky;
             top: 0;
             z-index: 8;
-            background: linear-gradient(90deg, #131b27f0, #151f2df0);
-            border-bottom: 1px solid #273246;
+            background: linear-gradient(90deg, #181818f0, #202020f0);
+            border-bottom: 1px solid #2f2f2f;
             backdrop-filter: blur(10px);
             padding: 14px 22px;
         }
@@ -1674,24 +1724,24 @@ internal sealed class LocalVideoServer : IDisposable
         body.mode-play .brand {
             font-family: "Avenir Next Condensed", "Avenir Next", "Segoe UI", sans-serif;
             font-size: clamp(22px, 2.5vw, 30px);
-            color: #f3f8ff;
+            color: #f1f1f1;
             letter-spacing: .5px;
         }
 
         body.mode-play .meta {
-            color: #9caec2;
+            color: #b0b0b0;
         }
 
         body.mode-play .meta a {
-            color: #7fe2cb;
+            color: #d0d0d0;
             text-decoration: none;
             margin-left: 6px;
         }
 
         body.mode-play .panel {
-            background: linear-gradient(180deg, #121a24ef, #0e151eef);
-            border: 1px solid #253245;
-            color: #d6dfeb;
+            background: linear-gradient(180deg, #1f1f1fef, #181818ef);
+            border: 1px solid #303030;
+            color: #e4e4e4;
             box-shadow: 0 18px 32px rgba(0, 0, 0, .24);
             border-radius: 14px;
         }
@@ -1699,22 +1749,22 @@ internal sealed class LocalVideoServer : IDisposable
         body.mode-play .label,
         body.mode-play .status,
         body.mode-play .hint {
-            color: #9fb0c4;
+            color: #b3b3b3;
         }
 
         body.mode-play input[type="text"],
         body.mode-play input[type="password"] {
-            border: 1px solid #32445d;
-            background: #0f1621;
-            color: #edf3ff;
+            border: 1px solid #3f3f3f;
+            background: #121212;
+            color: #f1f1f1;
         }
 
         body.mode-play .progress-wrap {
-            background: #253243;
+            background: #2a2a2a;
         }
 
         body.mode-play .progress-bar {
-            background: linear-gradient(90deg, #4dbca5, #7be0cc);
+            background: linear-gradient(90deg, #707070, #a8a8a8);
         }
 
         body.mode-play .play-layout {
@@ -1723,25 +1773,25 @@ internal sealed class LocalVideoServer : IDisposable
         }
 
         body.mode-play .player-surface {
-            border: 1px solid #2d3d54;
+            border: 1px solid #363636;
             box-shadow: 0 30px 60px rgba(0, 0, 0, .38);
             border-radius: 16px;
         }
 
         body.mode-play .video-title {
-            color: #f3f8ff;
+            color: #f1f1f1;
         }
 
         body.mode-play button {
-            background: linear-gradient(135deg, #1f8f7d, #36b59e);
-            color: #f7fffd;
-            border: 1px solid #2db59f55;
+            background: linear-gradient(135deg, #2f2f2f, #3d3d3d);
+            color: #f1f1f1;
+            border: 1px solid #575757;
         }
 
         body.mode-play button.alt {
-            background: linear-gradient(135deg, #36455c, #2a3444);
-            border-color: #4f637f55;
-            color: #dfe8f5;
+            background: linear-gradient(135deg, #262626, #343434);
+            border-color: #4a4a4a;
+            color: #e6e6e6;
         }
 
         @keyframes rise {
@@ -2051,13 +2101,15 @@ internal sealed class LocalVideoServer : IDisposable
                 };
 
                 const row = document.createElement('div');
-                row.className = 'playlist-row';
+                row.className = 'playlist-row' + (i === currentPlaylistIndex ? ' current-row' : '');
                 row.appendChild(btn);
 
                 const infoBtn = document.createElement('button');
                 infoBtn.type = 'button';
                 infoBtn.className = 'playlist-info-btn';
-                infoBtn.textContent = 'Info';
+                infoBtn.textContent = '⋮';
+                infoBtn.title = 'Header bilgisi';
+                infoBtn.setAttribute('aria-label', 'Header bilgisi');
                 infoBtn.onclick = async (evt) => {
                     evt.preventDefault();
                     evt.stopPropagation();
