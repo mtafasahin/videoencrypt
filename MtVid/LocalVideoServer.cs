@@ -1476,6 +1476,68 @@ internal sealed class LocalVideoServer : IDisposable
             box-shadow: none;
         }
 
+        .player-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px;
+            background: linear-gradient(180deg, #161f2b, #121a24);
+            border-top: 1px solid #2a3647;
+            overflow-x: auto;
+            flex-wrap: nowrap;
+            scrollbar-width: thin;
+        }
+
+        .player-controls .control-btn {
+            border: 1px solid #3a495f;
+            border-radius: 8px;
+            background: #1c2837;
+            color: #e7eef8;
+            padding: 7px 11px;
+            font-size: 12px;
+            line-height: 1.1;
+            white-space: nowrap;
+            flex: 0 0 auto;
+        }
+
+        .player-controls .control-btn:hover {
+            background: #243348;
+        }
+
+        .control-volume {
+            width: 96px;
+            flex: 0 0 auto;
+            accent-color: #78bcae;
+        }
+
+        .control-speed-wrap {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: #c9d6e7;
+            font-size: 12px;
+            white-space: nowrap;
+            flex: 0 0 auto;
+        }
+
+        .control-speed {
+            border: 1px solid #3a495f;
+            border-radius: 8px;
+            background: #1c2837;
+            color: #e7eef8;
+            padding: 5px 8px;
+            font-size: 12px;
+        }
+
+        .control-time {
+            margin-left: auto;
+            color: #c7d5e8;
+            font-size: 12px;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            flex: 0 0 auto;
+        }
+
         .video-meta {
             display: flex;
             align-items: center;
@@ -1868,6 +1930,27 @@ internal sealed class LocalVideoServer : IDisposable
             border-radius: 16px;
         }
 
+        body.mode-play .player-controls {
+            background: linear-gradient(180deg, #171717, #121212);
+            border-top: 1px solid #2f2f2f;
+        }
+
+        body.mode-play .player-controls .control-btn,
+        body.mode-play .control-speed {
+            background: #232323;
+            border-color: #4a4a4a;
+            color: #efefef;
+        }
+
+        body.mode-play .player-controls .control-btn:hover {
+            background: #2b2b2b;
+        }
+
+        body.mode-play .control-speed-wrap,
+        body.mode-play .control-time {
+            color: #cdcdcd;
+        }
+
         body.mode-play .video-title {
             color: #f1f1f1;
         }
@@ -1902,6 +1985,9 @@ internal sealed class LocalVideoServer : IDisposable
             .playlist-items { max-height: 28vh; }
             body.page-app .body { padding: 12px; }
             .video-meta { align-items: flex-start; }
+            .player-controls { gap: 6px; padding: 8px 10px; }
+            .control-volume { width: 78px; }
+            .control-time { font-size: 11px; }
         }
     </style>
 </head>
@@ -2001,7 +2087,27 @@ internal sealed class LocalVideoServer : IDisposable
                     <div>
                         <div class="play-main">
                             <div class="player-surface">
-                                <video controls preload="metadata" src="/stream"></video>
+                                <video preload="metadata" src="/stream"></video>
+                                <div id="playerControls" class="player-controls" role="group" aria-label="Video controls">
+                                    <button id="playPauseBtn" class="control-btn" type="button">Play</button>
+                                    <button id="seekBackBtn" class="control-btn" type="button">-10s</button>
+                                    <button id="seekForwardBtn" class="control-btn" type="button">+10s</button>
+                                    <button id="muteBtn" class="control-btn" type="button">Ses</button>
+                                    <input id="volumeSlider" class="control-volume" type="range" min="0" max="100" value="100" step="1" aria-label="Ses seviyesi" />
+                                    <label class="control-speed-wrap" for="speedSelect">Hiz
+                                        <select id="speedSelect" class="control-speed">
+                                            <option value="0.5">0.5x</option>
+                                            <option value="0.75">0.75x</option>
+                                            <option value="1" selected>1x</option>
+                                            <option value="1.25">1.25x</option>
+                                            <option value="1.5">1.5x</option>
+                                            <option value="2">2x</option>
+                                        </select>
+                                    </label>
+                                    <span id="controlTime" class="control-time">00:00 / 00:00</span>
+                                    <button id="pipBtn" class="control-btn" type="button">PiP</button>
+                                    <button id="fullscreenBtn" class="control-btn" type="button">Tam Ekran</button>
+                                </div>
                             </div>
 
                             <div class="panel video-meta">
@@ -2090,6 +2196,16 @@ internal sealed class LocalVideoServer : IDisposable
         const infoBody = document.getElementById('infoBody');
         const infoCloseBtn = document.getElementById('infoCloseBtn');
         const infoCloseBtn2 = document.getElementById('infoCloseBtn2');
+        const playerControls = document.getElementById('playerControls');
+        const playPauseBtn = document.getElementById('playPauseBtn');
+        const seekBackBtn = document.getElementById('seekBackBtn');
+        const seekForwardBtn = document.getElementById('seekForwardBtn');
+        const muteBtn = document.getElementById('muteBtn');
+        const volumeSlider = document.getElementById('volumeSlider');
+        const speedSelect = document.getElementById('speedSelect');
+        const pipBtn = document.getElementById('pipBtn');
+        const fullscreenBtn = document.getElementById('fullscreenBtn');
+        const controlTime = document.getElementById('controlTime');
 
         const LARGE_OPEN_THRESHOLD_BYTES = 512 * 1024 * 1024;
 
@@ -2114,6 +2230,167 @@ internal sealed class LocalVideoServer : IDisposable
                 advancedToggle.textContent = isOpen ? '⊖ Advanced' : '⊕ Advanced';
             }
         });
+
+        function formatControlTime(seconds) {
+            if (!Number.isFinite(seconds) || seconds < 0) {
+                return '00:00';
+            }
+
+            const total = Math.floor(seconds);
+            const h = Math.floor(total / 3600);
+            const m = Math.floor((total % 3600) / 60);
+            const s = total % 60;
+            if (h > 0) {
+                return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+            }
+
+            return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        }
+
+        function updatePlayerControlState() {
+            if (!video) {
+                return;
+            }
+
+            if (playPauseBtn) {
+                playPauseBtn.textContent = video.paused ? 'Play' : 'Pause';
+            }
+
+            if (muteBtn) {
+                muteBtn.textContent = video.muted || video.volume <= 0 ? 'Sessiz' : 'Ses';
+            }
+
+            if (volumeSlider) {
+                const currentVol = video.muted ? 0 : Math.round((video.volume || 0) * 100);
+                volumeSlider.value = String(currentVol);
+            }
+
+            if (speedSelect) {
+                speedSelect.value = String(video.playbackRate || 1);
+            }
+
+            if (controlTime) {
+                const current = formatControlTime(video.currentTime || 0);
+                const total = formatControlTime(video.duration || 0);
+                controlTime.textContent = `${current} / ${total}`;
+            }
+
+            if (pipBtn) {
+                const pipSupported = !!document.pictureInPictureEnabled && !video.disablePictureInPicture;
+                pipBtn.disabled = !pipSupported;
+                pipBtn.textContent = document.pictureInPictureElement ? 'PiP Cik' : 'PiP';
+            }
+        }
+
+        function setupPlayerControls() {
+            if (!video || !playerControls) {
+                return;
+            }
+
+            video.controls = false;
+            video.addEventListener('play', updatePlayerControlState);
+            video.addEventListener('pause', updatePlayerControlState);
+            video.addEventListener('timeupdate', updatePlayerControlState);
+            video.addEventListener('loadedmetadata', updatePlayerControlState);
+            video.addEventListener('durationchange', updatePlayerControlState);
+            video.addEventListener('volumechange', updatePlayerControlState);
+            video.addEventListener('ratechange', updatePlayerControlState);
+
+            playPauseBtn?.addEventListener('click', async () => {
+                if (video.paused) {
+                    await video.play().catch(() => {});
+                } else {
+                    video.pause();
+                }
+                updatePlayerControlState();
+            });
+
+            seekBackBtn?.addEventListener('click', () => {
+                const next = Math.max(0, (video.currentTime || 0) - 10);
+                video.currentTime = next;
+                updatePlayerControlState();
+            });
+
+            seekForwardBtn?.addEventListener('click', () => {
+                const max = Number.isFinite(video.duration) ? video.duration : (video.currentTime || 0) + 10;
+                const next = Math.min(max, (video.currentTime || 0) + 10);
+                video.currentTime = next;
+                updatePlayerControlState();
+            });
+
+            muteBtn?.addEventListener('click', () => {
+                video.muted = !video.muted;
+                updatePlayerControlState();
+            });
+
+            volumeSlider?.addEventListener('input', () => {
+                const value = Number(volumeSlider.value);
+                if (!Number.isFinite(value)) {
+                    return;
+                }
+
+                video.muted = value <= 0;
+                video.volume = Math.min(1, Math.max(0, value / 100));
+                updatePlayerControlState();
+            });
+
+            speedSelect?.addEventListener('change', () => {
+                const value = Number(speedSelect.value);
+                if (!Number.isFinite(value) || value <= 0) {
+                    return;
+                }
+
+                video.playbackRate = value;
+                updatePlayerControlState();
+            });
+
+            pipBtn?.addEventListener('click', async () => {
+                if (!document.pictureInPictureEnabled || video.disablePictureInPicture) {
+                    return;
+                }
+
+                try {
+                    if (document.pictureInPictureElement) {
+                        await document.exitPictureInPicture();
+                    } else {
+                        await video.requestPictureInPicture();
+                    }
+                } catch {
+                }
+
+                updatePlayerControlState();
+            });
+
+            document.addEventListener('enterpictureinpicture', updatePlayerControlState);
+            document.addEventListener('leavepictureinpicture', updatePlayerControlState);
+
+            fullscreenBtn?.addEventListener('click', async () => {
+                const host = video.parentElement;
+                if (!host) {
+                    return;
+                }
+
+                try {
+                    if (document.fullscreenElement) {
+                        await document.exitFullscreen();
+                        return;
+                    }
+
+                    if (host.requestFullscreen) {
+                        await host.requestFullscreen();
+                    } else if (host.webkitRequestFullscreen) {
+                        host.webkitRequestFullscreen();
+                    }
+                } catch {
+                }
+            });
+
+            updatePlayerControlState();
+        }
+
+        if (pageMode === 'play') {
+            setupPlayerControls();
+        }
 
         function updateNowPlaying() {
             if (!nowPlayingTitle || !nowPlayingMeta) {
