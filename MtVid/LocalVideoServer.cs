@@ -1486,6 +1486,18 @@ internal sealed class LocalVideoServer : IDisposable
             overflow: visible;
             flex-wrap: nowrap;
             scrollbar-width: thin;
+            opacity: 0;
+            transform: translateY(10px);
+            pointer-events: none;
+            transition: opacity .2s ease, transform .2s ease;
+        }
+
+        .player-surface.controls-visible .player-controls,
+        .player-surface:hover .player-controls,
+        .player-surface:focus-within .player-controls {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
         }
 
         .player-controls .control-btn {
@@ -2048,6 +2060,14 @@ internal sealed class LocalVideoServer : IDisposable
             .control-seek-wrap { min-width: 140px; }
             .seek-preview { width: 132px; }
         }
+
+        @media (any-pointer: coarse) {
+            .player-controls {
+                opacity: 1;
+                transform: translateY(0);
+                pointer-events: auto;
+            }
+        }
     </style>
 </head>
 <body class="__BODY_CLASS__">
@@ -2145,7 +2165,7 @@ internal sealed class LocalVideoServer : IDisposable
 
                     <div>
                         <div class="play-main">
-                            <div class="player-surface">
+                            <div id="playerSurface" class="player-surface">
                                 <video preload="metadata" src="/stream"></video>
                                 <div id="playerControls" class="player-controls" role="group" aria-label="Video controls">
                                     <button id="playPauseBtn" class="control-btn" type="button">Play</button>
@@ -2277,6 +2297,7 @@ internal sealed class LocalVideoServer : IDisposable
         const pipBtn = document.getElementById('pipBtn');
         const fullscreenBtn = document.getElementById('fullscreenBtn');
         const controlTime = document.getElementById('controlTime');
+        const playerSurface = document.getElementById('playerSurface');
 
         const LARGE_OPEN_THRESHOLD_BYTES = 512 * 1024 * 1024;
 
@@ -2296,6 +2317,8 @@ internal sealed class LocalVideoServer : IDisposable
         const previewCanvas = document.createElement('canvas');
         previewCanvas.width = 160;
         previewCanvas.height = 90;
+        const CONTROL_AUTOHIDE_MS = 1400;
+        let controlsHideTimer = null;
 
         if (pageMode === 'encrypt') {
             if (playSection) playSection.style.display = 'none';
@@ -2512,12 +2535,49 @@ internal sealed class LocalVideoServer : IDisposable
             seekPreview.style.left = `${localX}px`;
         }
 
+        function setControlsVisible(visible) {
+            if (!playerSurface) {
+                return;
+            }
+
+            playerSurface.classList.toggle('controls-visible', !!visible);
+        }
+
+        function clearControlsHideTimer() {
+            if (!controlsHideTimer) {
+                return;
+            }
+
+            clearTimeout(controlsHideTimer);
+            controlsHideTimer = null;
+        }
+
+        function scheduleControlsAutoHide() {
+            if (!playerSurface || window.matchMedia('(any-pointer: coarse)').matches) {
+                return;
+            }
+
+            clearControlsHideTimer();
+            controlsHideTimer = setTimeout(() => {
+                controlsHideTimer = null;
+                if (!playerSurface.matches(':hover') && !playerSurface.matches(':focus-within') && !isSeeking) {
+                    setControlsVisible(false);
+                }
+            }, CONTROL_AUTOHIDE_MS);
+        }
+
+        function bumpControlsVisibility() {
+            setControlsVisible(true);
+            scheduleControlsAutoHide();
+        }
+
         function setupPlayerControls() {
-            if (!video || !playerControls) {
+            if (!video || !playerControls || !playerSurface) {
                 return;
             }
 
             video.controls = false;
+            bumpControlsVisibility();
             video.addEventListener('play', updatePlayerControlState);
             video.addEventListener('pause', updatePlayerControlState);
             video.addEventListener('timeupdate', updatePlayerControlState);
@@ -2526,7 +2586,21 @@ internal sealed class LocalVideoServer : IDisposable
             video.addEventListener('volumechange', updatePlayerControlState);
             video.addEventListener('ratechange', updatePlayerControlState);
 
+            playerSurface.addEventListener('mouseenter', bumpControlsVisibility);
+            playerSurface.addEventListener('mousemove', bumpControlsVisibility);
+            playerSurface.addEventListener('pointermove', bumpControlsVisibility);
+            playerSurface.addEventListener('mouseleave', () => {
+                if (!isSeeking) {
+                    setControlsVisible(false);
+                }
+            });
+            playerSurface.addEventListener('focusin', bumpControlsVisibility);
+            playerSurface.addEventListener('focusout', () => {
+                scheduleControlsAutoHide();
+            });
+
             playPauseBtn?.addEventListener('click', async () => {
+                bumpControlsVisibility();
                 if (video.paused) {
                     await video.play().catch(() => {});
                 } else {
@@ -2536,12 +2610,14 @@ internal sealed class LocalVideoServer : IDisposable
             });
 
             seekBackBtn?.addEventListener('click', () => {
+                bumpControlsVisibility();
                 const next = Math.max(0, (video.currentTime || 0) - 10);
                 video.currentTime = next;
                 updatePlayerControlState();
             });
 
             seekForwardBtn?.addEventListener('click', () => {
+                bumpControlsVisibility();
                 const max = Number.isFinite(video.duration) ? video.duration : (video.currentTime || 0) + 10;
                 const next = Math.min(max, (video.currentTime || 0) + 10);
                 video.currentTime = next;
@@ -2549,6 +2625,7 @@ internal sealed class LocalVideoServer : IDisposable
             });
 
             seekSlider?.addEventListener('input', () => {
+                bumpControlsVisibility();
                 isSeeking = true;
                 const target = getSeekSecondsFromSlider();
                 video.currentTime = target;
@@ -2559,6 +2636,7 @@ internal sealed class LocalVideoServer : IDisposable
             });
 
             seekSlider?.addEventListener('change', () => {
+                bumpControlsVisibility();
                 const target = getSeekSecondsFromSlider();
                 video.currentTime = target;
                 isSeeking = false;
@@ -2566,6 +2644,7 @@ internal sealed class LocalVideoServer : IDisposable
             });
 
             seekSlider?.addEventListener('pointerdown', () => {
+                bumpControlsVisibility();
                 isSeeking = true;
             });
 
@@ -2574,6 +2653,7 @@ internal sealed class LocalVideoServer : IDisposable
                 video.currentTime = target;
                 isSeeking = false;
                 updatePlayerControlState();
+                scheduleControlsAutoHide();
             };
             seekSlider?.addEventListener('pointerup', stopSeeking);
             seekSlider?.addEventListener('keyup', (evt) => {
@@ -2588,6 +2668,8 @@ internal sealed class LocalVideoServer : IDisposable
                 if (!seekSlider || !seekPreview || !Number.isFinite(video.duration) || video.duration <= 0) {
                     return;
                 }
+
+                bumpControlsVisibility();
 
                 const rect = seekSlider.getBoundingClientRect();
                 if (rect.width <= 0) {
@@ -2618,6 +2700,7 @@ internal sealed class LocalVideoServer : IDisposable
                 if (seekPreview) {
                     seekPreview.hidden = true;
                 }
+                scheduleControlsAutoHide();
             });
 
             seekSlider?.addEventListener('mouseleave', () => {
@@ -2633,11 +2716,13 @@ internal sealed class LocalVideoServer : IDisposable
             }, { passive: true });
 
             muteBtn?.addEventListener('click', () => {
+                bumpControlsVisibility();
                 video.muted = !video.muted;
                 updatePlayerControlState();
             });
 
             volumeSlider?.addEventListener('input', () => {
+                bumpControlsVisibility();
                 const value = Number(volumeSlider.value);
                 if (!Number.isFinite(value)) {
                     return;
@@ -2649,6 +2734,7 @@ internal sealed class LocalVideoServer : IDisposable
             });
 
             speedSelect?.addEventListener('change', () => {
+                bumpControlsVisibility();
                 const value = Number(speedSelect.value);
                 if (!Number.isFinite(value) || value <= 0) {
                     return;
@@ -2659,6 +2745,7 @@ internal sealed class LocalVideoServer : IDisposable
             });
 
             pipBtn?.addEventListener('click', async () => {
+                bumpControlsVisibility();
                 if (!document.pictureInPictureEnabled || video.disablePictureInPicture) {
                     return;
                 }
@@ -2679,6 +2766,7 @@ internal sealed class LocalVideoServer : IDisposable
             document.addEventListener('leavepictureinpicture', updatePlayerControlState);
 
             fullscreenBtn?.addEventListener('click', async () => {
+                bumpControlsVisibility();
                 const host = video.parentElement;
                 if (!host) {
                     return;
