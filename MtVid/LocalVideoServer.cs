@@ -147,6 +147,12 @@ internal sealed class LocalVideoServer : IDisposable
                 return;
             }
 
+            if (_enableUi && path.Equals("/api/package-info", StringComparison.OrdinalIgnoreCase))
+            {
+                ProcessPackageInfoRequest(context);
+                return;
+            }
+
             if (_enableUi && (path == "/" || path.Equals("/index.html", StringComparison.OrdinalIgnoreCase)))
             {
                 WriteHomePage(context.Response);
@@ -278,7 +284,7 @@ internal sealed class LocalVideoServer : IDisposable
             {
                 ok = true,
                 message = "Package opened.",
-                fileName = Path.GetFileName(next.PackagePath),
+                fileName = next.DisplayFileName,
                 contentType = next.Header.ContentType
             });
         }
@@ -382,7 +388,7 @@ internal sealed class LocalVideoServer : IDisposable
                 context.Request.InputStream.CopyTo(outFile);
             }
 
-            LoadedPackageSession next = CreateSession(tempFile, password, deleteOnDispose: true);
+            LoadedPackageSession next = CreateSession(tempFile, password, deleteOnDispose: true, preferredDisplayName: fileName);
             tempFile = null;
 
             LoadedPackageSession? previous;
@@ -398,7 +404,7 @@ internal sealed class LocalVideoServer : IDisposable
             {
                 ok = true,
                 message = "Package uploaded and opened.",
-                fileName = Path.GetFileName(next.PackagePath),
+                fileName = next.DisplayFileName,
                 contentType = next.Header.ContentType
             });
         }
@@ -610,7 +616,7 @@ internal sealed class LocalVideoServer : IDisposable
         {
             ok = true,
             loaded = true,
-            fileName = Path.GetFileName(session.PackagePath),
+            fileName = session.DisplayFileName,
             contentType = session.Header.ContentType
         });
     }
@@ -648,6 +654,47 @@ internal sealed class LocalVideoServer : IDisposable
             }
 
             WriteJson(context.Response, HttpStatusCode.OK, new { ok = true, path = pickedPath });
+        }
+        catch (Exception ex)
+        {
+            WriteJson(context.Response, HttpStatusCode.BadRequest, new { ok = false, message = ex.Message });
+        }
+    }
+
+    private void ProcessPackageInfoRequest(HttpListenerContext context)
+    {
+        try
+        {
+            if (context.Request.HttpMethod != "POST")
+            {
+                context.Response.StatusCode = (int)HttpStatusCode.MethodNotAllowed;
+                context.Response.Close();
+                return;
+            }
+
+            using StreamReader reader = new(context.Request.InputStream, Encoding.UTF8);
+            string body = reader.ReadToEnd();
+            PackageInfoRequest? payload = JsonSerializer.Deserialize<PackageInfoRequest>(body, JsonBodyOptions);
+            if (payload is null || string.IsNullOrWhiteSpace(payload.PackagePath))
+            {
+                WriteJson(context.Response, HttpStatusCode.BadRequest, new { ok = false, message = "packagePath is required." });
+                return;
+            }
+
+            using FileStream fs = new(payload.PackagePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            PackageHeader header = PackageHeader.ReadFrom(fs);
+
+            WriteJson(context.Response, HttpStatusCode.OK, new
+            {
+                ok = true,
+                fileName = Path.GetFileName(payload.PackagePath),
+                originalFileName = header.OriginalFileName,
+                hasOriginalFileName = !string.IsNullOrWhiteSpace(header.OriginalFileName)
+            });
+        }
+        catch (FileNotFoundException ex)
+        {
+            WriteJson(context.Response, HttpStatusCode.NotFound, new { ok = false, message = ex.Message });
         }
         catch (Exception ex)
         {
@@ -1534,6 +1581,76 @@ internal sealed class LocalVideoServer : IDisposable
             return `${abbreviated}.mtaf`;
         }
 
+        async function tryGetOriginalNameFromPackageFile(file) {
+            try {
+                const buffer = await file.slice(0, 8192).arrayBuffer();
+                const view = new DataView(buffer);
+                const bytes = new Uint8Array(buffer);
+                let offset = 0;
+
+                if (bytes.length < 4 || bytes[0] !== 0x4d || bytes[1] !== 0x54 || bytes[2] !== 0x41 || bytes[3] !== 0x46) {
+                    return null;
+                }
+
+                offset += 4;
+                if (offset >= view.byteLength) return null;
+                const version = view.getUint8(offset);
+                offset += 1;
+
+                if (version !== 1 && version !== 2) {
+                    return null;
+                }
+
+                offset += 4; // chunk size
+                offset += 8; // original length
+                offset += 4; // chunk count
+                offset += 4; // iterations
+                offset += 16; // salt
+                offset += 4; // nonce prefix
+                offset += 16; // verifier
+                if (offset >= view.byteLength) return null;
+
+                const ctLen = view.getUint8(offset);
+                offset += 1 + ctLen;
+                if (offset > view.byteLength) return null;
+
+                if (version < 2) {
+                    return null;
+                }
+
+                if (offset + 2 > view.byteLength) return null;
+                const nameLen = view.getUint16(offset, true);
+                offset += 2;
+                if (nameLen === 0 || offset + nameLen > view.byteLength) return null;
+
+                const nameBytes = bytes.slice(offset, offset + nameLen);
+                const original = new TextDecoder('utf-8').decode(nameBytes).trim();
+                return original || null;
+            } catch {
+                return null;
+            }
+        }
+
+        async function tryGetOriginalNameByPath(path) {
+            try {
+                const res = await fetch('/api/package-info', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ packagePath: path })
+                });
+
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data?.ok) {
+                    return null;
+                }
+
+                const value = typeof data.originalFileName === 'string' ? data.originalFileName.trim() : '';
+                return value || null;
+            } catch {
+                return null;
+            }
+        }
+
         async function startPackJobForFile(file, outputName, password, parsedChunk, onUploadProgress) {
             const result = await new Promise((resolve, reject) => {
                 const xhr = new XMLHttpRequest();
@@ -1715,7 +1832,7 @@ internal sealed class LocalVideoServer : IDisposable
             }
         });
 
-        queueBtn.addEventListener('click', () => {
+        queueBtn.addEventListener('click', async () => {
             const files = pkgFile.files ? Array.from(pkgFile.files) : [];
             if (files.length === 0) {
                 status.textContent = 'Playlist icin en az bir .mtaf dosyasi sec.';
@@ -1728,7 +1845,8 @@ internal sealed class LocalVideoServer : IDisposable
                     continue;
                 }
 
-                playlist.push({ file, name: file.name });
+                const originalName = await tryGetOriginalNameFromPackageFile(file);
+                playlist.push({ file, name: originalName || file.name });
                 added++;
             }
 
@@ -1761,7 +1879,9 @@ internal sealed class LocalVideoServer : IDisposable
                         continue;
                     }
 
-                    const name = p.split('/').pop() || p;
+                    const fallbackName = p.split('/').pop() || p;
+                    const originalName = await tryGetOriginalNameByPath(p);
+                    const name = originalName || fallbackName;
                     playlist.push({ path: p, name });
                     added++;
                 }
@@ -2068,7 +2188,7 @@ internal sealed class LocalVideoServer : IDisposable
                 response.OutputStream.Close();
             }
 
-            private static LoadedPackageSession CreateSession(string packagePath, string password, bool deleteOnDispose = false)
+            private static LoadedPackageSession CreateSession(string packagePath, string password, bool deleteOnDispose = false, string? preferredDisplayName = null)
             {
                 if (!File.Exists(packagePath))
                 {
@@ -2083,7 +2203,23 @@ internal sealed class LocalVideoServer : IDisposable
                     throw new UnauthorizedAccessException("Wrong password. Package could not be unlocked.");
                 }
 
-                return new LoadedPackageSession(packagePath, header, encryptionKey, deleteOnDispose);
+                string displayFileName = ResolveDisplayFileName(header, packagePath, preferredDisplayName);
+                return new LoadedPackageSession(packagePath, displayFileName, header, encryptionKey, deleteOnDispose);
+            }
+
+            private static string ResolveDisplayFileName(PackageHeader header, string packagePath, string? preferredDisplayName)
+            {
+                if (!string.IsNullOrWhiteSpace(header.OriginalFileName))
+                {
+                    return header.OriginalFileName.Trim();
+                }
+
+                if (!string.IsNullOrWhiteSpace(preferredDisplayName))
+                {
+                    return Path.GetFileName(preferredDisplayName.Trim());
+                }
+
+                return Path.GetFileName(packagePath);
             }
 
             private static void TryDelete(string? path)
@@ -2153,15 +2289,17 @@ internal sealed class LocalVideoServer : IDisposable
 
             private sealed class LoadedPackageSession : IDisposable
             {
-                public LoadedPackageSession(string packagePath, PackageHeader header, byte[] encryptionKey, bool deleteOnDispose)
+                public LoadedPackageSession(string packagePath, string displayFileName, PackageHeader header, byte[] encryptionKey, bool deleteOnDispose)
                 {
                     PackagePath = packagePath;
+                    DisplayFileName = displayFileName;
                     Header = header;
                     EncryptionKey = encryptionKey;
                     DeleteOnDispose = deleteOnDispose;
                 }
 
                 public string PackagePath { get; }
+                public string DisplayFileName { get; }
                 public PackageHeader Header { get; }
                 public byte[] EncryptionKey { get; }
                 public bool DeleteOnDispose { get; }
@@ -2189,6 +2327,11 @@ internal sealed class LocalVideoServer : IDisposable
                 public string? Password { get; set; }
                 public int? ChunkMb { get; set; }
                 public int? Iterations { get; set; }
+            }
+
+            private sealed class PackageInfoRequest
+            {
+                public string? PackagePath { get; set; }
             }
 
             private sealed class PackJobState

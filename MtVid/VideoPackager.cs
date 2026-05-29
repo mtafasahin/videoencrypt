@@ -39,7 +39,8 @@ internal static class VideoPackager
                 Salt = salt,
                 NoncePrefix = noncePrefix,
                 PasswordVerifier = passwordVerifier,
-                ContentType = contentType
+                ContentType = contentType,
+                OriginalFileName = Path.GetFileName(inputVideoPath)
             };
 
             using FileStream output = new(outputPackagePath, FileMode.Create, FileAccess.Write, FileShare.None);

@@ -8,7 +8,7 @@ internal sealed class PackageHeader
 {
     private static readonly byte[] Magic = "MTAF"u8.ToArray();
 
-    public const byte CurrentVersion = 1;
+    public const byte CurrentVersion = 2;
     public const int SaltSizeBytes = 16;
     public const int NoncePrefixSizeBytes = 4;
     public const int PasswordVerifierSizeBytes = 16;
@@ -23,6 +23,7 @@ internal sealed class PackageHeader
     public byte[] NoncePrefix { get; init; } = Array.Empty<byte>();
     public byte[] PasswordVerifier { get; init; } = Array.Empty<byte>();
     public string ContentType { get; init; } = "application/octet-stream";
+    public string? OriginalFileName { get; init; }
     public long HeaderSize { get; init; }
 
     public void WriteTo(Stream stream)
@@ -48,6 +49,13 @@ internal sealed class PackageHeader
             throw new InvalidDataException("Content type is too long.");
         }
 
+        string originalName = OriginalFileName ?? string.Empty;
+        byte[] originalNameBytes = Encoding.UTF8.GetBytes(originalName);
+        if (originalNameBytes.Length > ushort.MaxValue)
+        {
+            throw new InvalidDataException("Original file name is too long.");
+        }
+
         using BinaryWriter writer = new(stream, Encoding.UTF8, leaveOpen: true);
         writer.Write(Magic);
         writer.Write(Version);
@@ -60,6 +68,8 @@ internal sealed class PackageHeader
         writer.Write(PasswordVerifier);
         writer.Write((byte)contentTypeBytes.Length);
         writer.Write(contentTypeBytes);
+        writer.Write((ushort)originalNameBytes.Length);
+        writer.Write(originalNameBytes);
     }
 
     public static PackageHeader ReadFrom(Stream stream)
@@ -73,7 +83,7 @@ internal sealed class PackageHeader
         }
 
         byte version = reader.ReadByte();
-        if (version != CurrentVersion)
+        if (version is not 1 and not CurrentVersion)
         {
             throw new InvalidDataException($"Unsupported package version: {version}");
         }
@@ -87,6 +97,23 @@ internal sealed class PackageHeader
         byte[] verifier = reader.ReadBytes(PasswordVerifierSizeBytes);
         int contentTypeLength = reader.ReadByte();
         byte[] contentTypeBytes = reader.ReadBytes(contentTypeLength);
+        string? originalFileName = null;
+
+        if (version >= 2)
+        {
+            ushort originalNameLength = reader.ReadUInt16();
+            byte[] originalNameBytes = reader.ReadBytes(originalNameLength);
+            if (originalNameBytes.Length != originalNameLength)
+            {
+                throw new InvalidDataException("Package header is truncated or corrupted.");
+            }
+
+            originalFileName = Encoding.UTF8.GetString(originalNameBytes);
+            if (string.IsNullOrWhiteSpace(originalFileName))
+            {
+                originalFileName = null;
+            }
+        }
 
         if (salt.Length != SaltSizeBytes || noncePrefix.Length != NoncePrefixSizeBytes || verifier.Length != PasswordVerifierSizeBytes || contentTypeBytes.Length != contentTypeLength)
         {
@@ -109,6 +136,7 @@ internal sealed class PackageHeader
             NoncePrefix = noncePrefix,
             PasswordVerifier = verifier,
             ContentType = Encoding.UTF8.GetString(contentTypeBytes),
+            OriginalFileName = originalFileName,
             HeaderSize = stream.Position
         };
     }
