@@ -160,6 +160,12 @@ internal sealed class LocalVideoServer : IDisposable
                 return;
             }
 
+            if (_enableUi && path.Equals("/api/migrate-package", StringComparison.OrdinalIgnoreCase))
+            {
+                ProcessMigratePackageRequest(context);
+                return;
+            }
+
             if (_enableUi && path.Equals("/api/thumbnail-upload", StringComparison.OrdinalIgnoreCase))
             {
                 ProcessThumbnailUploadRequest(context);
@@ -720,6 +726,7 @@ internal sealed class LocalVideoServer : IDisposable
 
             using FileStream fs = new(payload.PackagePath, FileMode.Open, FileAccess.Read, FileShare.Read);
             PackageHeader header = PackageHeader.ReadFrom(fs);
+            long fileSizeBytes = fs.Length;
 
             WriteJson(context.Response, HttpStatusCode.OK, new
             {
@@ -730,7 +737,21 @@ internal sealed class LocalVideoServer : IDisposable
                 thumbnailJpegBase64 = header.ThumbnailJpeg is { Length: > 0 } ? Convert.ToBase64String(header.ThumbnailJpeg) : null,
                 hasThumbnail = header.ThumbnailJpeg is { Length: > 0 },
                 durationSeconds = header.DurationSeconds,
-                hasDuration = header.DurationSeconds.HasValue
+                hasDuration = header.DurationSeconds.HasValue,
+                version = header.Version,
+                currentVersion = PackageHeader.CurrentVersion,
+                isCurrentVersion = header.Version == PackageHeader.CurrentVersion,
+                contentType = header.ContentType,
+                headerSize = header.HeaderSize,
+                chunkSize = header.ChunkSize,
+                originalLength = header.OriginalLength,
+                chunkCount = header.ChunkCount,
+                kdfIterations = header.KdfIterations,
+                saltBytes = header.Salt?.Length ?? 0,
+                noncePrefixBytes = header.NoncePrefix?.Length ?? 0,
+                passwordVerifierBytes = header.PasswordVerifier?.Length ?? 0,
+                thumbnailBytes = header.ThumbnailJpeg?.Length ?? 0,
+                fileSizeBytes
             });
         }
         catch (FileNotFoundException ex)
@@ -740,6 +761,193 @@ internal sealed class LocalVideoServer : IDisposable
         catch (Exception ex)
         {
             WriteJson(context.Response, HttpStatusCode.BadRequest, new { ok = false, message = ex.Message });
+        }
+    }
+
+    private void ProcessMigratePackageRequest(HttpListenerContext context)
+    {
+        try
+        {
+            if (context.Request.HttpMethod != "POST")
+            {
+                context.Response.StatusCode = (int)HttpStatusCode.MethodNotAllowed;
+                context.Response.Close();
+                return;
+            }
+
+            using StreamReader reader = new(context.Request.InputStream, Encoding.UTF8);
+            string body = reader.ReadToEnd();
+            MigratePackageRequest? payload = JsonSerializer.Deserialize<MigratePackageRequest>(body, JsonBodyOptions);
+            if (payload is null || string.IsNullOrWhiteSpace(payload.PackagePath))
+            {
+                WriteJson(context.Response, HttpStatusCode.BadRequest, new { ok = false, message = "packagePath is required." });
+                return;
+            }
+
+            bool inPlace = payload.InPlace.GetValueOrDefault(true);
+            byte[]? thumbnailJpeg = ParseThumbnailDataUrl(payload.ThumbnailDataUrl);
+            string migratedPath = MigratePackageToCurrentVersion(
+                payload.PackagePath,
+                payload.OutputPath,
+                inPlace,
+                payload.OriginalFileName,
+                thumbnailJpeg,
+                payload.DurationSeconds,
+                out byte previousVersion,
+                out bool migrated);
+
+            WriteJson(context.Response, HttpStatusCode.OK, new
+            {
+                ok = true,
+                migrated,
+                packagePath = migratedPath,
+                previousVersion,
+                currentVersion = PackageHeader.CurrentVersion
+            });
+        }
+        catch (FileNotFoundException ex)
+        {
+            WriteJson(context.Response, HttpStatusCode.NotFound, new { ok = false, message = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            WriteJson(context.Response, HttpStatusCode.BadRequest, new { ok = false, message = ex.Message });
+        }
+    }
+
+    private static string MigratePackageToCurrentVersion(
+        string packagePath,
+        string? outputPath,
+        bool inPlace,
+        string? originalFileName,
+        byte[]? thumbnailJpeg,
+        double? durationSeconds,
+        out byte previousVersion,
+        out bool migrated)
+    {
+        if (!File.Exists(packagePath))
+        {
+            throw new FileNotFoundException("Package file not found.", packagePath);
+        }
+
+        using FileStream input = new(packagePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        PackageHeader header = PackageHeader.ReadFrom(input);
+        previousVersion = header.Version;
+
+        string? resolvedOriginal = !string.IsNullOrWhiteSpace(header.OriginalFileName)
+            ? header.OriginalFileName
+            : (string.IsNullOrWhiteSpace(originalFileName) ? null : Path.GetFileName(originalFileName));
+
+        byte[]? resolvedThumbnail = header.ThumbnailJpeg is { Length: > 0 }
+            ? header.ThumbnailJpeg
+            : (thumbnailJpeg is { Length: > 0 } ? thumbnailJpeg : null);
+
+        double? resolvedDuration = header.DurationSeconds.HasValue && header.DurationSeconds.Value > 0
+            ? header.DurationSeconds
+            : (durationSeconds.HasValue && durationSeconds.Value > 0 ? durationSeconds : null);
+
+        bool metadataEnriched =
+            !string.IsNullOrWhiteSpace(resolvedOriginal) && string.IsNullOrWhiteSpace(header.OriginalFileName)
+            || resolvedThumbnail is { Length: > 0 } && header.ThumbnailJpeg is not { Length: > 0 }
+            || resolvedDuration.HasValue && (!header.DurationSeconds.HasValue || header.DurationSeconds.Value <= 0);
+
+        migrated = header.Version != PackageHeader.CurrentVersion || metadataEnriched;
+
+        string targetPath = inPlace
+            ? packagePath
+            : string.IsNullOrWhiteSpace(outputPath)
+                ? packagePath
+                : outputPath;
+
+        if (!migrated)
+        {
+            if (!inPlace && !string.Equals(targetPath, packagePath, StringComparison.OrdinalIgnoreCase))
+            {
+                string? targetDirectory = Path.GetDirectoryName(targetPath);
+                if (!string.IsNullOrWhiteSpace(targetDirectory) && !Directory.Exists(targetDirectory))
+                {
+                    Directory.CreateDirectory(targetDirectory);
+                }
+
+                File.Copy(packagePath, targetPath, overwrite: true);
+            }
+
+            return targetPath;
+        }
+
+        string tempOutput = Path.Combine(Path.GetDirectoryName(targetPath) ?? Path.GetTempPath(), $"mtvid-migrate-{Guid.NewGuid():N}.mtaf");
+        try
+        {
+            using FileStream output = new(tempOutput, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            PackageHeader migratedHeader = new()
+            {
+                Version = PackageHeader.CurrentVersion,
+                ChunkSize = header.ChunkSize,
+                OriginalLength = header.OriginalLength,
+                ChunkCount = header.ChunkCount,
+                KdfIterations = header.KdfIterations,
+                Salt = header.Salt,
+                NoncePrefix = header.NoncePrefix,
+                PasswordVerifier = header.PasswordVerifier,
+                ContentType = header.ContentType,
+                OriginalFileName = resolvedOriginal,
+                ThumbnailJpeg = resolvedThumbnail,
+                DurationSeconds = resolvedDuration
+            };
+            migratedHeader.WriteTo(output);
+
+            input.Position = header.HeaderSize;
+            input.CopyTo(output);
+        }
+        catch
+        {
+            TryDelete(tempOutput);
+            throw;
+        }
+
+        if (!inPlace && !string.Equals(targetPath, packagePath, StringComparison.OrdinalIgnoreCase))
+        {
+            string? targetDirectory = Path.GetDirectoryName(targetPath);
+            if (!string.IsNullOrWhiteSpace(targetDirectory) && !Directory.Exists(targetDirectory))
+            {
+                Directory.CreateDirectory(targetDirectory);
+            }
+
+            File.Move(tempOutput, targetPath, overwrite: true);
+            return targetPath;
+        }
+
+        File.Move(tempOutput, packagePath, overwrite: true);
+        return packagePath;
+    }
+
+    private static byte[]? ParseThumbnailDataUrl(string? thumbnailDataUrl)
+    {
+        if (string.IsNullOrWhiteSpace(thumbnailDataUrl))
+        {
+            return null;
+        }
+
+        string raw = thumbnailDataUrl.Trim();
+        int commaIndex = raw.IndexOf(',');
+        if (raw.StartsWith("data:", StringComparison.OrdinalIgnoreCase) && commaIndex > 0)
+        {
+            raw = raw[(commaIndex + 1)..];
+        }
+
+        try
+        {
+            byte[] bytes = Convert.FromBase64String(raw);
+            if (bytes.Length == 0 || bytes.Length > PackageHeader.MaxThumbnailBytes)
+            {
+                return null;
+            }
+
+            return bytes;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -1152,7 +1360,7 @@ internal sealed class LocalVideoServer : IDisposable
 
         .play-layout {
             display: grid;
-            grid-template-columns: minmax(280px, 340px) minmax(0, 1fr) minmax(260px, 320px);
+            grid-template-columns: minmax(280px, 340px) minmax(0, 1fr) minmax(300px, 390px);
             gap: 14px;
             align-items: start;
         }
@@ -1196,6 +1404,7 @@ internal sealed class LocalVideoServer : IDisposable
             position: sticky;
             top: 12px;
             align-self: start;
+            min-width: 320px;
         }
 
         .playlist-items {
@@ -1207,45 +1416,70 @@ internal sealed class LocalVideoServer : IDisposable
         }
 
         .playlist-items li {
-            margin-bottom: 8px;
+            margin-bottom: 4px;
+        }
+
+        .playlist-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 6px;
+            align-items: stretch;
         }
 
         .playlist-btn {
             width: 100%;
             text-align: left;
-            border-radius: 10px;
-            padding: 10px;
-            border: 1px solid #2a323d;
-            background: linear-gradient(180deg, #1a2430, #121a23);
+            border-radius: 8px;
+            padding: 6px 8px;
+            border: 1px solid #2d3a4f;
+            background: linear-gradient(180deg, #131c28, #0f1722);
             color: #dfe8f3;
-            font-size: 13px;
-            letter-spacing: .2px;
+            font-family: "Roboto", "Avenir Next", "Segoe UI", sans-serif;
+            font-size: 12px;
             display: grid;
-            grid-template-columns: 36px 96px minmax(0, 1fr);
-            gap: 10px;
+            grid-template-columns: 24px 100px minmax(0, 1fr);
+            gap: 8px;
             align-items: center;
         }
 
-        .playlist-idx {
-            width: 36px;
-            height: 36px;
+        .playlist-info-btn {
             border-radius: 8px;
+            padding: 6px 8px;
+            font-size: 11px;
+            min-width: 52px;
+            background: linear-gradient(135deg, #2a3444, #1f2937);
+            border: 1px solid #4f637f55;
+            color: #dfe8f5;
+            font-family: "Roboto", "Avenir Next", "Segoe UI", sans-serif;
+        }
+
+        .playlist-idx {
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
             display: grid;
             place-items: center;
-            background: #223041;
-            color: #9fb3c8;
-            font-weight: 700;
+            background: #1d2938;
+            color: #93a8bf;
+            font-weight: 500;
             font-size: 12px;
         }
 
         .playlist-name {
-            white-space: nowrap;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
             overflow: hidden;
             text-overflow: ellipsis;
+            white-space: normal;
+            line-height: 1.32;
+            font-size: 14px;
+            font-weight: 500;
         }
 
         .playlist-thumb {
-            width: 76px;
+            position: relative;
+            width: 100px;
             aspect-ratio: 16 / 9;
             border-radius: 8px;
             background: linear-gradient(135deg, #2c3b4f, #1d2733);
@@ -1259,7 +1493,7 @@ internal sealed class LocalVideoServer : IDisposable
         }
 
         .playlist-thumb img {
-            width: 96px;
+            width: 100%;
             height: 100%;
             object-fit: cover;
             display: block;
@@ -1270,7 +1504,6 @@ internal sealed class LocalVideoServer : IDisposable
             box-shadow: 0 0 0 2px #57c2ad33;
             color: #fff;
         }
-            position: relative;
 
         .playlist-btn.current .playlist-idx {
             background: linear-gradient(135deg, #49b9a3, #78e0c8);
@@ -1279,18 +1512,31 @@ internal sealed class LocalVideoServer : IDisposable
 
         .check-row {
             display: flex;
+            gap: 8px;
+            align-items: center;
+            white-space: nowrap;
+            font-size: 13px;
+        }
+
+        .check-row span {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--ink);
+        }
 
         .playlist-duration {
             position: absolute;
             right: 4px;
             bottom: 4px;
-            padding: 2px 5px;
-            border-radius: 5px;
-            background: #000000cc;
-            color: #f2f7ff;
-            font-size: 10px;
-            font-weight: 700;
-            line-height: 1;
+            padding: 3px 4px;
+            border-radius: 4px;
+            background: rgba(0, 0, 0, 0.82);
+            color: #fff;
+            font-size: 12px;
+            font-weight: 500;
+            line-height: 1.1;
+            letter-spacing: .3px;
+            z-index: 2;
         }
 
         .playlist-text {
@@ -1298,22 +1544,15 @@ internal sealed class LocalVideoServer : IDisposable
             display: grid;
             gap: 4px;
         }
-            gap: 8px;
-            align-items: center;
-            white-space: nowrap;
-            font-size: 13px;
-        }
-            font-size: 13px;
-            font-weight: 700;
-            color: #edf4ff;
-        }
 
         .playlist-meta {
             color: #9eb0c5;
-            font-size: 11px;
+            font-size: 12px;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            line-height: 1.2;
+        }
 
         .now-playing {
             margin-bottom: 10px;
@@ -1354,6 +1593,64 @@ internal sealed class LocalVideoServer : IDisposable
 
         .hint strong {
             color: var(--accent-2);
+        }
+
+        .info-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(3, 9, 17, 0.72);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 18px;
+            z-index: 50;
+        }
+
+        .info-modal.open {
+            display: flex;
+        }
+
+        .info-card {
+            width: min(820px, 100%);
+            max-height: min(84vh, 900px);
+            overflow: hidden;
+            background: linear-gradient(180deg, #101822, #0c141d);
+            border: 1px solid #2a394f;
+            border-radius: 14px;
+            box-shadow: 0 28px 80px rgba(0, 0, 0, 0.45);
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr) auto;
+        }
+
+        .info-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 12px 14px;
+            border-bottom: 1px solid #253449;
+            color: #eef5ff;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        .info-body {
+            margin: 0;
+            padding: 12px 14px;
+            overflow: auto;
+            color: #d4e2f5;
+            font-size: 12px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-family: ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+        }
+
+        .info-foot {
+            display: flex;
+            justify-content: flex-end;
+            padding: 10px 14px 14px;
+            border-top: 1px solid #253449;
         }
 
         body.mode-play {
@@ -1421,7 +1718,7 @@ internal sealed class LocalVideoServer : IDisposable
         }
 
         body.mode-play .play-layout {
-            grid-template-columns: minmax(300px, 360px) minmax(0, 1fr) minmax(280px, 340px);
+            grid-template-columns: minmax(300px, 360px) minmax(0, 1fr) minmax(330px, 420px);
             gap: 20px;
         }
 
@@ -1585,13 +1882,29 @@ internal sealed class LocalVideoServer : IDisposable
                             <button id="nextBtn" type="button">Sonraki</button>
                         </div>
                         <button id="clearPlaylistBtn" type="button" style="margin-top:8px;">Listeyi Temizle</button>
+                        <button id="migratePlaylistBtn" class="alt" type="button" style="margin-top:8px;">Eski Surumleri Guncelle</button>
                     </div>
                 </div>
             </div>
         </section>
     </main>
+
+    <div id="infoModal" class="info-modal" aria-hidden="true">
+        <div class="info-card" role="dialog" aria-modal="true" aria-labelledby="infoTitle">
+            <div class="info-head">
+                <span id="infoTitle">Paket Bilgisi</span>
+                <button id="infoCloseBtn" type="button" class="alt">Kapat</button>
+            </div>
+            <pre id="infoBody" class="info-body"></pre>
+            <div class="info-foot">
+                <button id="infoCloseBtn2" type="button">Tamam</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const pageMode = '__MODE__';
+        const CURRENT_HEADER_VERSION = __CURRENT_HEADER_VERSION__;
         const video = document.querySelector('video');
         const videoInput = document.getElementById('videoInput');
         const mtafOutput = document.getElementById('mtafOutput');
@@ -1619,6 +1932,7 @@ internal sealed class LocalVideoServer : IDisposable
         const queueBtn = document.getElementById('queueBtn');
         const pickPlaylistNativeBtn = document.getElementById('pickPlaylistNativeBtn');
         const clearPlaylistBtn = document.getElementById('clearPlaylistBtn');
+        const migratePlaylistBtn = document.getElementById('migratePlaylistBtn');
         const prevBtn = document.getElementById('prevBtn');
         const nextBtn = document.getElementById('nextBtn');
         const playlistList = document.getElementById('playlistList');
@@ -1626,6 +1940,11 @@ internal sealed class LocalVideoServer : IDisposable
         const status = document.getElementById('status');
         const nowPlayingTitle = document.getElementById('nowPlayingTitle');
         const nowPlayingMeta = document.getElementById('nowPlayingMeta');
+        const infoModal = document.getElementById('infoModal');
+        const infoTitle = document.getElementById('infoTitle');
+        const infoBody = document.getElementById('infoBody');
+        const infoCloseBtn = document.getElementById('infoCloseBtn');
+        const infoCloseBtn2 = document.getElementById('infoCloseBtn2');
 
         const LARGE_OPEN_THRESHOLD_BYTES = 512 * 1024 * 1024;
 
@@ -1714,7 +2033,9 @@ internal sealed class LocalVideoServer : IDisposable
 
                 const meta = document.createElement('span');
                 meta.className = 'playlist-meta';
-                meta.textContent = i === currentPlaylistIndex ? 'Simdi oynatiliyor' : `Parca ${i + 1}`;
+                const stateText = i === currentPlaylistIndex ? 'Simdi oynatiliyor' : `Parca ${i + 1}`;
+                const versionText = Number.isFinite(item.version) ? `v${item.version}` : 'v?';
+                meta.textContent = `${stateText} • ${versionText}`;
                 textWrap.appendChild(name);
                 textWrap.appendChild(meta);
 
@@ -1728,11 +2049,168 @@ internal sealed class LocalVideoServer : IDisposable
                         status.textContent = err?.message || 'Playlist dosyasi acilamadi.';
                     }
                 };
-                li.appendChild(btn);
+
+                const row = document.createElement('div');
+                row.className = 'playlist-row';
+                row.appendChild(btn);
+
+                const infoBtn = document.createElement('button');
+                infoBtn.type = 'button';
+                infoBtn.className = 'playlist-info-btn';
+                infoBtn.textContent = 'Info';
+                infoBtn.onclick = async (evt) => {
+                    evt.preventDefault();
+                    evt.stopPropagation();
+                    try {
+                        const details = await loadPlaylistItemDebugInfo(item, i);
+                        renderPlaylist();
+                        openInfoModal(`Header Bilgisi • ${details.displayName || item.name}`, details);
+                    } catch (err) {
+                        status.textContent = err?.message || 'Paket bilgisi alinamadi.';
+                    }
+                };
+                row.appendChild(infoBtn);
+
+                li.appendChild(row);
                 playlistList.appendChild(li);
             }
 
             updateNowPlaying();
+        }
+
+        function formatSize(value) {
+            const bytes = Number(value);
+            if (!Number.isFinite(bytes) || bytes < 0) {
+                return null;
+            }
+
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            let size = bytes;
+            let idx = 0;
+            while (size >= 1024 && idx < units.length - 1) {
+                size /= 1024;
+                idx += 1;
+            }
+
+            const digits = idx === 0 ? 0 : 2;
+            return `${size.toFixed(digits)} ${units[idx]}`;
+        }
+
+        function closeInfoModal() {
+            if (!infoModal) {
+                return;
+            }
+
+            infoModal.classList.remove('open');
+            infoModal.setAttribute('aria-hidden', 'true');
+        }
+
+        function openInfoModal(title, payload) {
+            if (!infoModal || !infoTitle || !infoBody) {
+                return;
+            }
+
+            infoTitle.textContent = title || 'Paket Bilgisi';
+            infoBody.textContent = JSON.stringify(payload, null, 2);
+            infoModal.classList.add('open');
+            infoModal.setAttribute('aria-hidden', 'false');
+        }
+
+        async function loadPlaylistItemDebugInfo(item, index) {
+            if (item.path) {
+                const res = await fetch('/api/package-info', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ packagePath: item.path })
+                });
+
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data?.ok) {
+                    throw new Error(data.message || 'Paket bilgisi alinamadi.');
+                }
+
+                const thumbBase64 = typeof data.thumbnailJpegBase64 === 'string' ? data.thumbnailJpegBase64.trim() : '';
+                const thumbData = thumbBase64 ? `data:image/jpeg;base64,${thumbBase64}` : null;
+                const durationSeconds = Number(data.durationSeconds);
+                const durationLabel = Number.isFinite(durationSeconds) && durationSeconds > 0
+                    ? formatDurationLabel(durationSeconds)
+                    : '--:--';
+                const originalName = typeof data.originalFileName === 'string' ? data.originalFileName.trim() : '';
+                const version = Number(data.version);
+
+                if (originalName) {
+                    item.name = originalName;
+                }
+                if (thumbData) {
+                    item.thumbData = thumbData;
+                }
+                if (durationLabel) {
+                    item.durationLabel = durationLabel;
+                }
+                if (Number.isFinite(version)) {
+                    item.version = version;
+                }
+
+                return {
+                    playlistIndex: index + 1,
+                    displayName: item.name,
+                    packagePath: item.path,
+                    fileName: data.fileName,
+                    version: data.version,
+                    currentVersion: data.currentVersion,
+                    isCurrentVersion: data.isCurrentVersion,
+                    contentType: data.contentType,
+                    originalFileName: data.originalFileName,
+                    hasOriginalFileName: data.hasOriginalFileName,
+                    durationSeconds,
+                    durationLabel,
+                    hasDuration: data.hasDuration,
+                    hasThumbnail: data.hasThumbnail,
+                    thumbnailData: thumbData,
+                    thumbnailBytes: data.thumbnailBytes,
+                    chunkSize: data.chunkSize,
+                    chunkCount: data.chunkCount,
+                    originalLength: data.originalLength,
+                    originalLengthText: formatSize(data.originalLength),
+                    headerSize: data.headerSize,
+                    headerSizeText: formatSize(data.headerSize),
+                    fileSizeBytes: data.fileSizeBytes,
+                    fileSizeText: formatSize(data.fileSizeBytes),
+                    kdfIterations: data.kdfIterations,
+                    saltBytes: data.saltBytes,
+                    noncePrefixBytes: data.noncePrefixBytes,
+                    passwordVerifierBytes: data.passwordVerifierBytes
+                };
+            }
+
+            if (item.file) {
+                const local = await tryGetPackageMetaFromPackageFile(item.file);
+                if (!local?.headerDebug) {
+                    throw new Error('Lokal dosya header bilgisi okunamadi.');
+                }
+
+                if (local.originalName) {
+                    item.name = local.originalName;
+                }
+                if (local.thumbData) {
+                    item.thumbData = local.thumbData;
+                }
+                if (local.durationLabel) {
+                    item.durationLabel = local.durationLabel;
+                }
+                if (Number.isFinite(local.version)) {
+                    item.version = local.version;
+                }
+
+                return {
+                    playlistIndex: index + 1,
+                    displayName: item.name,
+                    packagePath: '(upload secimi)',
+                    ...local.headerDebug
+                };
+            }
+
+            throw new Error('Bilgi alinacak playlist dosyasi bulunamadi.');
         }
 
         function captureThumbnailForCurrentItem() {
@@ -1862,6 +2340,7 @@ internal sealed class LocalVideoServer : IDisposable
         }
 
         async function tryGetPackageMetaFromPackageFile(file) {
+            const empty = { originalName: null, thumbData: null, durationLabel: '--:--', version: null, headerDebug: null };
             try {
                 const buffer = await file.slice(0, PackageHeaderMaxBytes).arrayBuffer();
                 const view = new DataView(buffer);
@@ -1869,34 +2348,49 @@ internal sealed class LocalVideoServer : IDisposable
                 let offset = 0;
 
                 if (bytes.length < 4 || bytes[0] !== 0x4d || bytes[1] !== 0x54 || bytes[2] !== 0x41 || bytes[3] !== 0x46) {
-                    return { originalName: null, thumbData: null, durationLabel: '--:--' };
+                    return empty;
                 }
 
                 offset += 4;
-                if (offset >= view.byteLength) return { originalName: null, thumbData: null, durationLabel: '--:--' };
+                if (offset >= view.byteLength) return empty;
                 const version = view.getUint8(offset);
                 offset += 1;
 
                 if (version !== 1 && version !== 2 && version !== 3 && version !== 4) {
-                    return { originalName: null, thumbData: null, durationLabel: '--:--' };
+                    return empty;
                 }
 
-                offset += 4; // chunk size
-                offset += 8; // original length
-                offset += 4; // chunk count
-                offset += 4; // iterations
+                if (offset + 4 + 8 + 4 + 4 + 16 + 4 + 16 > view.byteLength) {
+                    return empty;
+                }
+
+                const chunkSizeValue = view.getInt32(offset, true);
+                offset += 4;
+                const originalLengthValue = Number(view.getBigInt64(offset, true));
+                offset += 8;
+                const chunkCountValue = view.getInt32(offset, true);
+                offset += 4;
+                const kdfIterationsValue = view.getInt32(offset, true);
+                offset += 4;
                 offset += 16; // salt
                 offset += 4; // nonce prefix
                 offset += 16; // verifier
-                if (offset >= view.byteLength) return { originalName: null, thumbData: null, durationLabel: '--:--' };
+                if (offset >= view.byteLength) return empty;
 
                 const ctLen = view.getUint8(offset);
                 offset += 1 + ctLen;
-                if (offset > view.byteLength) return { originalName: null, thumbData: null, durationLabel: '--:--' };
+                if (offset > view.byteLength) return empty;
+
+                let contentType = null;
+                if (ctLen > 0) {
+                    const ctStart = offset - ctLen;
+                    const ctBytes = bytes.slice(ctStart, offset);
+                    contentType = new TextDecoder('utf-8').decode(ctBytes).trim() || null;
+                }
 
                 let originalName = null;
                 if (version >= 2) {
-                    if (offset + 2 > view.byteLength) return { originalName: null, thumbData: null, durationLabel: '--:--' };
+                    if (offset + 2 > view.byteLength) return empty;
                     const nameLen = view.getUint16(offset, true);
                     offset += 2;
                     if (nameLen > 0 && offset + nameLen <= view.byteLength) {
@@ -1909,12 +2403,14 @@ internal sealed class LocalVideoServer : IDisposable
                 }
 
                 let thumbData = null;
+                let thumbnailBytes = 0;
                 if (version >= 3) {
-                    if (offset + 4 > view.byteLength) return { originalName, thumbData: null, durationLabel: '--:--' };
+                    if (offset + 4 > view.byteLength) return empty;
                     const thumbLen = view.getInt32(offset, true);
                     offset += 4;
                     if (thumbLen > 0 && offset + thumbLen <= view.byteLength) {
                         const thumbBytes = bytes.slice(offset, offset + thumbLen);
+                        thumbnailBytes = thumbLen;
                         thumbData = `data:image/jpeg;base64,${bytesToBase64(thumbBytes)}`;
                     }
 
@@ -1922,16 +2418,50 @@ internal sealed class LocalVideoServer : IDisposable
                 }
 
                 let durationLabel = '--:--';
+                let durationSeconds = null;
                 if (version >= 4 && offset + 8 <= view.byteLength) {
-                    const durationSeconds = view.getFloat64(offset, true);
-                    if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
-                        durationLabel = formatDurationLabel(durationSeconds);
+                    const parsedDuration = view.getFloat64(offset, true);
+                    if (Number.isFinite(parsedDuration) && parsedDuration > 0) {
+                        durationSeconds = parsedDuration;
+                        durationLabel = formatDurationLabel(parsedDuration);
                     }
+
+                    offset += 8;
                 }
 
-                return { originalName, thumbData, durationLabel };
+                return {
+                    originalName,
+                    thumbData,
+                    durationLabel,
+                    version,
+                    headerDebug: {
+                        fileName: file.name,
+                        version,
+                        currentVersion: CURRENT_HEADER_VERSION,
+                        isCurrentVersion: version === CURRENT_HEADER_VERSION,
+                        contentType,
+                        originalFileName: originalName,
+                        hasOriginalFileName: !!originalName,
+                        durationSeconds,
+                        hasDuration: Number.isFinite(durationSeconds) && durationSeconds > 0,
+                        hasThumbnail: thumbnailBytes > 0,
+                        thumbnailBytes,
+                        chunkSize: chunkSizeValue,
+                        chunkCount: chunkCountValue,
+                        originalLength: originalLengthValue,
+                        originalLengthText: formatSize(originalLengthValue),
+                        headerSize: offset,
+                        headerSizeText: formatSize(offset),
+                        fileSizeBytes: file.size,
+                        fileSizeText: formatSize(file.size),
+                        kdfIterations: kdfIterationsValue,
+                        saltBytes: 16,
+                        noncePrefixBytes: 4,
+                        passwordVerifierBytes: 16
+                    }
+                };
             } catch {
-                return { originalName: null, thumbData: null, durationLabel: '--:--' };
+                return empty;
             }
         }
 
@@ -1945,19 +2475,21 @@ internal sealed class LocalVideoServer : IDisposable
 
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok || !data?.ok) {
-                    return { originalName: null, thumbData: null, durationLabel: '--:--' };
+                    return { originalName: null, thumbData: null, durationLabel: '--:--', version: null };
                 }
 
                 const value = typeof data.originalFileName === 'string' ? data.originalFileName.trim() : '';
                 const thumbBase64 = typeof data.thumbnailJpegBase64 === 'string' ? data.thumbnailJpegBase64.trim() : '';
                 const durationSeconds = Number(data.durationSeconds);
+                const version = Number(data.version);
                 return {
                     originalName: value || null,
                     thumbData: thumbBase64 ? `data:image/jpeg;base64,${thumbBase64}` : null,
-                    durationLabel: Number.isFinite(durationSeconds) && durationSeconds > 0 ? formatDurationLabel(durationSeconds) : '--:--'
+                    durationLabel: Number.isFinite(durationSeconds) && durationSeconds > 0 ? formatDurationLabel(durationSeconds) : '--:--',
+                    version: Number.isFinite(version) ? version : null
                 };
             } catch {
-                return { originalName: null, thumbData: null, durationLabel: '--:--' };
+                return { originalName: null, thumbData: null, durationLabel: '--:--', version: null };
             }
         }
 
@@ -2075,6 +2607,84 @@ internal sealed class LocalVideoServer : IDisposable
             } finally {
                 URL.revokeObjectURL(objectUrl);
             }
+        }
+
+        async function openPackageForMetadata(path, password) {
+            const res = await fetch('/api/open', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ packagePath: path, password })
+            });
+
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data?.ok) {
+                throw new Error(data.message || 'Metadata icin dosya acilamadi.');
+            }
+
+            const loaded = new Promise((resolve, reject) => {
+                const onLoaded = () => {
+                    cleanup();
+                    resolve();
+                };
+                const onError = () => {
+                    cleanup();
+                    reject(new Error('Video metadata okunamadi.'));
+                };
+                const cleanup = () => {
+                    video.removeEventListener('loadedmetadata', onLoaded);
+                    video.removeEventListener('error', onError);
+                };
+                video.addEventListener('loadedmetadata', onLoaded, { once: true });
+                video.addEventListener('error', onError, { once: true });
+            });
+
+            video.pause();
+            video.src = '/stream?ts=' + Date.now();
+            video.load();
+            await loaded;
+            return data;
+        }
+
+        async function captureThumbnailDataFromActiveVideo(targetSecond) {
+            if (!video.videoWidth || !video.videoHeight) {
+                return null;
+            }
+
+            const duration = Number.isFinite(video.duration) ? video.duration : 0;
+            if (duration > 0) {
+                const seekSecond = Math.min(Math.max(0, targetSecond), Math.max(0, duration - 0.15));
+                if (Math.abs(video.currentTime - seekSecond) > 0.05) {
+                    await new Promise((resolve, reject) => {
+                        const onSeeked = () => {
+                            cleanup();
+                            resolve();
+                        };
+                        const onError = () => {
+                            cleanup();
+                            reject(new Error('Thumbnail seek basarisiz.'));
+                        };
+                        const cleanup = () => {
+                            video.removeEventListener('seeked', onSeeked);
+                            video.removeEventListener('error', onError);
+                        };
+
+                        video.addEventListener('seeked', onSeeked, { once: true });
+                        video.addEventListener('error', onError, { once: true });
+                        video.currentTime = seekSecond;
+                    });
+                }
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = 320;
+            canvas.height = Math.max(180, Math.floor((canvas.width * video.videoHeight) / video.videoWidth));
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                return null;
+            }
+
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            return canvas.toDataURL('image/jpeg', 0.82);
         }
 
         async function uploadThumbnailBytes(thumbBytes) {
@@ -2293,7 +2903,7 @@ internal sealed class LocalVideoServer : IDisposable
                 }
 
                 const meta = await tryGetPackageMetaFromPackageFile(file);
-                playlist.push({ file, name: meta.originalName || file.name, thumbData: meta.thumbData || null, durationLabel: meta.durationLabel || '--:--' });
+                playlist.push({ file, name: meta.originalName || file.name, thumbData: meta.thumbData || null, durationLabel: meta.durationLabel || '--:--', version: meta.version });
                 added++;
             }
 
@@ -2329,7 +2939,7 @@ internal sealed class LocalVideoServer : IDisposable
                     const fallbackName = p.split('/').pop() || p;
                     const meta = await tryGetPackageMetaByPath(p);
                     const name = meta.originalName || fallbackName;
-                    playlist.push({ path: p, name, thumbData: meta.thumbData || null, durationLabel: meta.durationLabel || '--:--' });
+                    playlist.push({ path: p, name, thumbData: meta.thumbData || null, durationLabel: meta.durationLabel || '--:--', version: meta.version });
                     added++;
                 }
 
@@ -2347,6 +2957,87 @@ internal sealed class LocalVideoServer : IDisposable
             } catch (err) {
                 status.textContent = err?.message || 'Native secici acilamadi.';
             }
+        });
+
+        migratePlaylistBtn?.addEventListener('click', async () => {
+            const targets = playlist.filter((item) => {
+                if (!item.path) {
+                    return false;
+                }
+
+                const hasKnownVersion = Number.isFinite(item.version);
+                const needsVersionUpgrade = !hasKnownVersion || item.version < CURRENT_HEADER_VERSION;
+                const needsDuration = !item.durationLabel || item.durationLabel === '--:--';
+                const needsThumbnail = !item.thumbData;
+                return needsVersionUpgrade || needsDuration || needsThumbnail;
+            });
+            if (targets.length === 0) {
+                status.textContent = `Guncellenecek surum/metadata eksigi bulunamadi (v${CURRENT_HEADER_VERSION}).`;
+                return;
+            }
+
+            const password = passwordInput.value;
+            if (!password) {
+                status.textContent = 'Migration icin once sifreyi gir.';
+                return;
+            }
+
+            let migratedCount = 0;
+            let failedCount = 0;
+
+            for (let i = 0; i < targets.length; i++) {
+                const item = targets[i];
+                status.textContent = `Surum/metadata guncelleniyor ${i + 1}/${targets.length}: ${item.name}`;
+                try {
+                    let durationSeconds = null;
+                    let thumbnailDataUrl = null;
+                    const needsDuration = !item.durationLabel || item.durationLabel === '--:--';
+                    const needsThumbnail = !item.thumbData;
+                    if (needsDuration || needsThumbnail) {
+                        await openPackageForMetadata(item.path, password);
+                        if (needsDuration && Number.isFinite(video.duration) && video.duration > 0) {
+                            durationSeconds = video.duration;
+                        }
+
+                        if (needsThumbnail) {
+                            thumbnailDataUrl = await captureThumbnailDataFromActiveVideo(10);
+                        }
+                    }
+
+                    const res = await fetch('/api/migrate-package', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            packagePath: item.path,
+                            inPlace: true,
+                            originalFileName: item.name,
+                            durationSeconds,
+                            thumbnailDataUrl
+                        })
+                    });
+
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || !data?.ok) {
+                        failedCount++;
+                        continue;
+                    }
+
+                    const refreshed = await tryGetPackageMetaByPath(item.path);
+                    item.version = refreshed.version ?? CURRENT_HEADER_VERSION;
+                    item.durationLabel = refreshed.durationLabel || item.durationLabel || '--:--';
+                    item.thumbData = refreshed.thumbData || item.thumbData || null;
+                    if (refreshed.originalName) {
+                        item.name = refreshed.originalName;
+                    }
+
+                    migratedCount++;
+                } catch {
+                    failedCount++;
+                }
+            }
+
+            renderPlaylist();
+            status.textContent = `Guncelleme tamamlandi. Basarili: ${migratedCount}, hatali: ${failedCount}.`;
         });
 
         clearPlaylistBtn.addEventListener('click', () => {
@@ -2471,6 +3162,19 @@ internal sealed class LocalVideoServer : IDisposable
             }
 
             mtafOutput.value = toDefaultOutputName(file.name);
+        });
+
+        infoCloseBtn?.addEventListener('click', closeInfoModal);
+        infoCloseBtn2?.addEventListener('click', closeInfoModal);
+        infoModal?.addEventListener('click', (evt) => {
+            if (evt.target === infoModal) {
+                closeInfoModal();
+            }
+        });
+        document.addEventListener('keydown', (evt) => {
+            if (evt.key === 'Escape') {
+                closeInfoModal();
+            }
         });
 
         packBtn.addEventListener('click', async () => {
@@ -2653,6 +3357,7 @@ internal sealed class LocalVideoServer : IDisposable
 
                 html = html.Replace("__MODE__", mode);
                 html = html.Replace("__BODY_CLASS__", "page-app");
+                html = html.Replace("__CURRENT_HEADER_VERSION__", PackageHeader.CurrentVersion.ToString());
 
                 byte[] payload = System.Text.Encoding.UTF8.GetBytes(html);
                 response.ContentType = "text/html; charset=utf-8";
@@ -2815,6 +3520,16 @@ internal sealed class LocalVideoServer : IDisposable
             private sealed class PackageInfoRequest
             {
                 public string? PackagePath { get; set; }
+            }
+
+            private sealed class MigratePackageRequest
+            {
+                public string? PackagePath { get; set; }
+                public string? OutputPath { get; set; }
+                public bool? InPlace { get; set; }
+                public string? OriginalFileName { get; set; }
+                public string? ThumbnailDataUrl { get; set; }
+                public double? DurationSeconds { get; set; }
             }
 
             private sealed class PackJobState
