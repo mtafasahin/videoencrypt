@@ -8,11 +8,12 @@ internal sealed class PackageHeader
 {
     private static readonly byte[] Magic = "MTAF"u8.ToArray();
 
-    public const byte CurrentVersion = 2;
+    public const byte CurrentVersion = 3;
     public const int SaltSizeBytes = 16;
     public const int NoncePrefixSizeBytes = 4;
     public const int PasswordVerifierSizeBytes = 16;
     public const int TagSizeBytes = 16;
+    public const int MaxThumbnailBytes = 1024 * 1024;
 
     public byte Version { get; init; } = CurrentVersion;
     public int ChunkSize { get; init; }
@@ -24,6 +25,7 @@ internal sealed class PackageHeader
     public byte[] PasswordVerifier { get; init; } = Array.Empty<byte>();
     public string ContentType { get; init; } = "application/octet-stream";
     public string? OriginalFileName { get; init; }
+    public byte[]? ThumbnailJpeg { get; init; }
     public long HeaderSize { get; init; }
 
     public void WriteTo(Stream stream)
@@ -49,11 +51,25 @@ internal sealed class PackageHeader
             throw new InvalidDataException("Content type is too long.");
         }
 
-        string originalName = OriginalFileName ?? string.Empty;
-        byte[] originalNameBytes = Encoding.UTF8.GetBytes(originalName);
-        if (originalNameBytes.Length > ushort.MaxValue)
+        byte[] originalNameBytes = Array.Empty<byte>();
+        if (Version >= 2)
         {
-            throw new InvalidDataException("Original file name is too long.");
+            string originalName = OriginalFileName ?? string.Empty;
+            originalNameBytes = Encoding.UTF8.GetBytes(originalName);
+            if (originalNameBytes.Length > ushort.MaxValue)
+            {
+                throw new InvalidDataException("Original file name is too long.");
+            }
+        }
+
+        byte[] thumbnailBytes = Array.Empty<byte>();
+        if (Version >= 3 && ThumbnailJpeg is { Length: > 0 })
+        {
+            thumbnailBytes = ThumbnailJpeg;
+            if (thumbnailBytes.Length > MaxThumbnailBytes)
+            {
+                throw new InvalidDataException($"Thumbnail is too large. Max {MaxThumbnailBytes} bytes.");
+            }
         }
 
         using BinaryWriter writer = new(stream, Encoding.UTF8, leaveOpen: true);
@@ -68,8 +84,18 @@ internal sealed class PackageHeader
         writer.Write(PasswordVerifier);
         writer.Write((byte)contentTypeBytes.Length);
         writer.Write(contentTypeBytes);
-        writer.Write((ushort)originalNameBytes.Length);
-        writer.Write(originalNameBytes);
+
+        if (Version >= 2)
+        {
+            writer.Write((ushort)originalNameBytes.Length);
+            writer.Write(originalNameBytes);
+        }
+
+        if (Version >= 3)
+        {
+            writer.Write(thumbnailBytes.Length);
+            writer.Write(thumbnailBytes);
+        }
     }
 
     public static PackageHeader ReadFrom(Stream stream)
@@ -83,7 +109,7 @@ internal sealed class PackageHeader
         }
 
         byte version = reader.ReadByte();
-        if (version is not 1 and not CurrentVersion)
+        if (version < 1 || version > CurrentVersion)
         {
             throw new InvalidDataException($"Unsupported package version: {version}");
         }
@@ -98,6 +124,7 @@ internal sealed class PackageHeader
         int contentTypeLength = reader.ReadByte();
         byte[] contentTypeBytes = reader.ReadBytes(contentTypeLength);
         string? originalFileName = null;
+        byte[]? thumbnailJpeg = null;
 
         if (version >= 2)
         {
@@ -112,6 +139,26 @@ internal sealed class PackageHeader
             if (string.IsNullOrWhiteSpace(originalFileName))
             {
                 originalFileName = null;
+            }
+        }
+
+        if (version >= 3)
+        {
+            int thumbnailLength = reader.ReadInt32();
+            if (thumbnailLength < 0 || thumbnailLength > MaxThumbnailBytes)
+            {
+                throw new InvalidDataException("Package thumbnail metadata is invalid.");
+            }
+
+            byte[] thumbnailBytes = reader.ReadBytes(thumbnailLength);
+            if (thumbnailBytes.Length != thumbnailLength)
+            {
+                throw new InvalidDataException("Package header is truncated or corrupted.");
+            }
+
+            if (thumbnailBytes.Length > 0)
+            {
+                thumbnailJpeg = thumbnailBytes;
             }
         }
 
@@ -137,6 +184,7 @@ internal sealed class PackageHeader
             PasswordVerifier = verifier,
             ContentType = Encoding.UTF8.GetString(contentTypeBytes),
             OriginalFileName = originalFileName,
+            ThumbnailJpeg = thumbnailJpeg,
             HeaderSize = stream.Position
         };
     }
