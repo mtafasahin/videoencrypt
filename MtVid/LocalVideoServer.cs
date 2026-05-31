@@ -462,7 +462,7 @@ internal sealed class LocalVideoServer : IDisposable
 
             string password = context.Request.Headers["X-Password"] ?? string.Empty;
             string sourceName = context.Request.Headers["X-File-Name"] ?? "video.bin";
-            string outputName = context.Request.Headers["X-Output-Name"] ?? BuildAbbreviatedMtafName(sourceName);
+            string outputName = context.Request.Headers["X-Output-Name"] ?? BuildGuidMtafName();
             string thumbnailId = context.Request.Headers["X-Thumbnail-Id"] ?? string.Empty;
             double? durationSeconds = null;
             string? durationHeader = context.Request.Headers["X-Duration-Seconds"];
@@ -3133,22 +3133,20 @@ internal sealed class LocalVideoServer : IDisposable
             openProgressBar.style.width = `${v}%`;
         }
 
-        function abbreviateFileBaseName(baseName) {
-            return baseName.replace(/[^.\s_]+/g, (token) => {
-                const chars = [...token];
-                if (chars.length <= 2) {
-                    return token;
-                }
+        function generateGuid() {
+            if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+                return crypto.randomUUID();
+            }
 
-                return `${chars[0]}${chars[chars.length - 1]}`;
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
             });
         }
 
-        function toDefaultOutputName(fileName) {
-            const dot = fileName.lastIndexOf('.');
-            const baseName = dot > 0 ? fileName.slice(0, dot) : fileName;
-            const abbreviated = abbreviateFileBaseName(baseName);
-            return `${abbreviated}.mtaf`;
+        function toDefaultOutputName() {
+            return `${generateGuid()}.mtaf`;
         }
 
         const PackageHeaderMaxBytes = 2 * 1024 * 1024;
@@ -4018,7 +4016,7 @@ internal sealed class LocalVideoServer : IDisposable
                 return;
             }
 
-            mtafOutput.value = toDefaultOutputName(file.name);
+            mtafOutput.value = toDefaultOutputName();
         });
 
         infoCloseBtn?.addEventListener('click', closeInfoModal);
@@ -4036,7 +4034,7 @@ internal sealed class LocalVideoServer : IDisposable
 
         packBtn.addEventListener('click', async () => {
             const file = videoInput.files && videoInput.files[0];
-            const outputPath = mtafOutput.value.trim() || (file ? toDefaultOutputName(file.name) : '');
+            const outputPath = mtafOutput.value.trim() || (file ? toDefaultOutputName() : '');
             const password = packPassword.value;
             const parsedChunk = Number.parseInt(chunkMb.value, 10);
 
@@ -4144,7 +4142,7 @@ internal sealed class LocalVideoServer : IDisposable
                 for (let i = 0; i < files.length; i++) {
                     const current = files[i];
                     const file = await current.handle.getFile();
-                    const outName = toDefaultOutputName(current.name);
+                    const outName = toDefaultOutputName();
 
                     batchStatus.textContent = `${i + 1}/${files.length} isleniyor: ${current.name} (yukleniyor)`;
                     const sourceDuration = await readDurationFromVideoFile(file);
@@ -4295,26 +4293,9 @@ internal sealed class LocalVideoServer : IDisposable
                 return input;
             }
 
-            private static string BuildAbbreviatedMtafName(string sourceFileName)
+            private static string BuildGuidMtafName()
             {
-                string baseName = Path.GetFileNameWithoutExtension(sourceFileName);
-                if (string.IsNullOrWhiteSpace(baseName))
-                {
-                    baseName = "video";
-                }
-
-                string abbreviated = Regex.Replace(baseName, @"[^.\s_]+", static match =>
-                {
-                    string token = match.Value;
-                    if (token.Length <= 2)
-                    {
-                        return token;
-                    }
-
-                    return string.Concat(token[0], token[^1]);
-                });
-
-                return SanitizeFileName($"{abbreviated}.mtaf");
+                return SanitizeFileName($"{Guid.NewGuid():D}.mtaf");
             }
 
             private static string GuessContentType(string inputPath)

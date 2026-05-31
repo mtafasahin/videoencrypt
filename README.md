@@ -91,7 +91,6 @@ UI ekraninda artik ikinci bir form var ve dogrudan video dosyasi sifreleyebilirs
 ```bash
 dotnet run --project MtVid -- serve --ui true --open true --port 8084
 ```
-
 2. Player ekranindaki `Videoyu Sifrele (.mtaf)` bolumunu doldur:
 
 - `Kaynak video dosyasi`: dosya secici ile videoyu sec
